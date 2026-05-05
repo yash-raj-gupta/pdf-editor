@@ -94,6 +94,22 @@ def preview(sid: str, page: int):
                     headers={"Cache-Control": "no-store"})
 
 
+def _parse_edits(raw_edits) -> list[tuple[int, tuple[float, float, float, float], str]]:
+    """Validate and convert the JSON edits payload to typed tuples."""
+    out: list[tuple[int, tuple[float, float, float, float], str]] = []
+    for e in raw_edits:
+        try:
+            page = int(e["page"])
+            bbox = tuple(float(x) for x in e["bbox"])
+            new_text = str(e["new_text"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"malformed edit {e!r}: {exc}") from None
+        if len(bbox) != 4:
+            raise ValueError(f"bbox must have 4 numbers: {e!r}")
+        out.append((page, bbox, new_text))
+    return out
+
+
 @app.post("/save/<sid>")
 def save(sid: str):
     sdir = session_dir(sid)
@@ -102,17 +118,10 @@ def save(sid: str):
     if not raw_edits:
         return jsonify({"error": "no edits to apply"}), 400
 
-    edit_tuples: list[tuple[int, tuple[float, float, float, float], str]] = []
-    for e in raw_edits:
-        try:
-            page = int(e["page"])
-            bbox = tuple(float(x) for x in e["bbox"])
-            new_text = str(e["new_text"])
-        except (KeyError, TypeError, ValueError):
-            return jsonify({"error": f"malformed edit: {e!r}"}), 400
-        if len(bbox) != 4:
-            return jsonify({"error": f"bbox must have 4 numbers: {e!r}"}), 400
-        edit_tuples.append((page, bbox, new_text))
+    try:
+        edit_tuples = _parse_edits(raw_edits)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     out_path = sdir / "edited.pdf"
     with PDFEditor(sdir / "original.pdf") as ed:
@@ -126,6 +135,34 @@ def save(sid: str):
         "warnings": warnings,
         "download_url": f"/download/{sid}",
     })
+
+
+@app.post("/preview-edited/<sid>/<int:page>.png")
+def preview_edited(sid: str, page: int):
+    """Apply pending edits in memory and return a PNG of the requested page.
+
+    The frontend hits this whenever the user types so they can see the result
+    without downloading. We do NOT save edited.pdf — this is a preview only.
+    """
+    sdir = session_dir(sid)
+    body = request.get_json(silent=True) or {}
+    raw_edits = body.get("edits") or []
+
+    try:
+        edit_tuples = _parse_edits(raw_edits)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    with PDFEditor(sdir / "original.pdf") as ed:
+        if edit_tuples:
+            ed.replace_spans(edit_tuples)
+        if page < 0 or page >= len(ed.doc):
+            return jsonify({"error": "page out of range"}), 404
+        pix = ed.doc[page].get_pixmap(dpi=PREVIEW_DPI, alpha=False)
+        png = pix.tobytes("png")
+
+    return Response(png, mimetype="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/download/<sid>")
@@ -219,7 +256,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .preview-canvas img {
     display: block; max-width: 100%; height: auto;
     box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    transition: opacity 0.15s;
   }
+  .preview-canvas.loading img { opacity: 0.55; }
+  .preview-spinner {
+    position: absolute; top: 14px; right: 14px; padding: 4px 10px;
+    border-radius: 99px; background: rgba(0,0,0,0.65); color: white;
+    font-size: 11px; font-weight: 500; opacity: 0;
+    transition: opacity 0.15s; pointer-events: none;
+  }
+  .preview-canvas.loading .preview-spinner { opacity: 1; }
+  .preview-stale-banner {
+    background: #fff8e7; color: #7a5800; border: 1px solid #ffd66b;
+    padding: 6px 10px; border-radius: 6px; font-size: 12px;
+    margin-bottom: 8px; display: none;
+  }
+  .preview-stale-banner.visible { display: block; }
   .span-overlay {
     position: absolute; border: 1px solid transparent; cursor: pointer;
     transition: background 0.1s, border-color 0.1s;
@@ -301,9 +353,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <main id="editor-pane" hidden>
   <section class="panel preview-section">
     <div class="page-tabs" id="page-tabs"></div>
+    <div class="preview-stale-banner" id="preview-banner">
+      Showing original — preview is updating&hellip;
+    </div>
     <div class="preview-scroll">
       <div class="preview-canvas" id="preview-canvas">
         <img id="page-img" alt="">
+        <div class="preview-spinner">updating preview&hellip;</div>
       </div>
     </div>
   </section>
@@ -407,9 +463,43 @@ function renderPage(pno) {
   state.currentPage = pno;
   renderPageTabs();
   const page = state.pages[pno];
+
+  // Render spans list once per page change. The image src may swap many times
+  // (each preview update) — only overlays should re-render on img load.
+  renderSpansList(page);
+
   const img = document.getElementById('page-img');
-  img.onload = () => { renderOverlays(page, img); renderSpansList(page); };
-  img.src = `/preview/${state.session}/${pno}.png?t=${Date.now()}`;
+  img.onload = () => renderOverlays(page, img);
+
+  // If we have edits for this page, show the edited preview right away;
+  // otherwise show the original.
+  if (hasEditsOnPage(pno)) {
+    requestPreviewUpdate(true);
+  } else {
+    setPageImageSrc(`/preview/${state.session}/${pno}.png?t=${Date.now()}`);
+  }
+}
+
+function hasEditsOnPage(pno) {
+  for (const e of state.edits.values()) if (e.page === pno) return true;
+  return false;
+}
+
+// Track the current blob URL so we can revoke it when swapping to a new one.
+let currentPreviewBlobUrl = null;
+function setPageImageSrc(src) {
+  const img = document.getElementById('page-img');
+  if (currentPreviewBlobUrl) {
+    URL.revokeObjectURL(currentPreviewBlobUrl);
+    currentPreviewBlobUrl = null;
+  }
+  img.src = src;
+}
+function setPageImageBlob(blob) {
+  const url = URL.createObjectURL(blob);
+  if (currentPreviewBlobUrl) URL.revokeObjectURL(currentPreviewBlobUrl);
+  currentPreviewBlobUrl = url;
+  document.getElementById('page-img').src = url;
 }
 
 function spanKey(span) {
@@ -523,6 +613,63 @@ function recordEdit(span, newText, card) {
     overlay && overlay.classList.add('dirty');
   }
   updateSaveButton();
+  requestPreviewUpdate();
+}
+
+// ---------- live preview ----------
+let previewTimer = null;
+let previewController = null;
+let previewSeq = 0;  // monotonic — used to ignore stale responses
+
+function requestPreviewUpdate(immediate = false) {
+  if (previewTimer) clearTimeout(previewTimer);
+  previewTimer = setTimeout(updatePreview, immediate ? 0 : 600);
+}
+
+async function updatePreview() {
+  const pno = state.currentPage;
+  const canvas = document.getElementById('preview-canvas');
+  // Send only edits relevant to *any* page — server applies all then renders
+  // the requested page. Sending all is fine; same payload as save.
+  const edits = Array.from(state.edits.values());
+
+  if (edits.length === 0) {
+    // No edits anywhere — show the cached original PNG.
+    canvas.classList.remove('loading');
+    setPageImageSrc(`/preview/${state.session}/${pno}.png?t=${Date.now()}`);
+    return;
+  }
+
+  // Cancel a still-in-flight previous request.
+  if (previewController) previewController.abort();
+  previewController = new AbortController();
+  const mySeq = ++previewSeq;
+
+  canvas.classList.add('loading');
+  try {
+    const r = await fetch(
+      `/preview-edited/${state.session}/${pno}.png`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edits }),
+        signal: previewController.signal,
+      }
+    );
+    if (mySeq !== previewSeq) return;  // a newer request started
+    if (!r.ok) {
+      console.error('preview failed', r.status);
+      canvas.classList.remove('loading');
+      return;
+    }
+    const blob = await r.blob();
+    if (mySeq !== previewSeq) return;
+    setPageImageBlob(blob);
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error('preview error', e);
+  } finally {
+    if (mySeq === previewSeq) canvas.classList.remove('loading');
+  }
 }
 
 function updateSaveButton() {
