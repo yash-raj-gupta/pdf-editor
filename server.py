@@ -193,6 +193,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     color: #1d1d1f; background: #f5f5f7; display: flex; flex-direction: column;
   }
+  /* The hidden attribute should remove an element from layout. Our flex
+     children carry display:flex which would override that — make sure the
+     hidden attribute always wins. */
+  [hidden] { display: none !important; }
   header {
     background: white; border-bottom: 1px solid #e5e5e7;
     padding: 12px 20px; display: flex; align-items: center; gap: 14px;
@@ -242,14 +246,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
     display: flex; flex-direction: column; min-height: 0;
   }
 
-  .page-tabs {
-    display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; flex-shrink: 0;
+  .preview-toolbar {
+    display: flex; gap: 8px; margin-bottom: 12px; align-items: center;
+    flex-shrink: 0; flex-wrap: wrap;
   }
+  .preview-toolbar .spacer { flex: 1; }
+  .page-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
   .page-tab {
     padding: 5px 11px; border-radius: 6px; background: #f0f0f3;
     cursor: pointer; font-size: 13px; user-select: none;
   }
   .page-tab.active { background: #007aff; color: white; }
+  .toolbar-group {
+    display: inline-flex; align-items: center; gap: 0;
+    background: #f0f0f3; border-radius: 7px; padding: 2px;
+  }
+  .toolbar-btn {
+    background: transparent; border: none; padding: 4px 9px;
+    font-size: 13px; cursor: pointer; border-radius: 5px;
+    color: #1d1d1f; min-width: 28px; user-select: none;
+    transition: background 0.1s;
+  }
+  .toolbar-btn:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
+  .toolbar-btn:disabled { color: #c7c7cc; cursor: not-allowed; }
+  .zoom-level {
+    font-size: 12px; color: #1d1d1f; min-width: 42px;
+    text-align: center; user-select: none; font-feature-settings: "tnum";
+  }
+  .compare-btn {
+    background: #f0f0f3; color: #1d1d1f; border: none;
+    padding: 6px 12px; border-radius: 7px; font-size: 13px;
+    cursor: pointer; font-weight: 500;
+  }
+  .compare-btn:hover:not(:disabled) { background: #e5e5e7; }
+  .compare-btn.active { background: #ff9f0a; color: white; }
+  .compare-btn:disabled { background: #f5f5f7; color: #c7c7cc; cursor: not-allowed; }
 
   .preview-scroll { flex: 1; overflow: auto; display: flex; justify-content: center; }
   .preview-canvas { position: relative; display: inline-block; }
@@ -352,9 +383,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
 <main id="editor-pane" hidden>
   <section class="panel preview-section">
-    <div class="page-tabs" id="page-tabs"></div>
-    <div class="preview-stale-banner" id="preview-banner">
-      Showing original — preview is updating&hellip;
+    <div class="preview-toolbar">
+      <div class="page-tabs" id="page-tabs"></div>
+      <div class="spacer"></div>
+      <div class="toolbar-group" title="Zoom">
+        <button class="toolbar-btn" id="zoom-out" aria-label="Zoom out">&minus;</button>
+        <button class="toolbar-btn zoom-level" id="zoom-level" title="Reset to fit">100%</button>
+        <button class="toolbar-btn" id="zoom-in"  aria-label="Zoom in">+</button>
+      </div>
+      <button class="compare-btn" id="compare-btn" disabled
+              title="Hold to see the original PDF without your edits">
+        Show original
+      </button>
     </div>
     <div class="preview-scroll">
       <div class="preview-canvas" id="preview-canvas">
@@ -384,8 +424,10 @@ const state = {
   session: null,
   pages: [],
   currentPage: 0,
-  edits: new Map(),  // key = "page:bbox" -> {page, bbox, new_text}
+  edits: new Map(),     // key = "page:bbox" -> {page, bbox, new_text}
   previewDpi: 144,
+  zoom: 1.0,            // 1.0 = fit-to-container, otherwise multiplier
+  viewMode: 'edited',   // 'edited' or 'original' (compare toggle)
 };
 
 // ---------- upload ----------
@@ -469,11 +511,11 @@ function renderPage(pno) {
   renderSpansList(page);
 
   const img = document.getElementById('page-img');
-  img.onload = () => renderOverlays(page, img);
+  img.onload = () => { applyZoom(); renderOverlays(page, img); };
 
-  // If we have edits for this page, show the edited preview right away;
-  // otherwise show the original.
-  if (hasEditsOnPage(pno)) {
+  // If we have edits for this page and we're in edited mode, show the edited
+  // preview right away; otherwise show the original.
+  if (state.viewMode === 'edited' && hasEditsOnPage(pno)) {
     requestPreviewUpdate(true);
   } else {
     setPageImageSrc(`/preview/${state.session}/${pno}.png?t=${Date.now()}`);
@@ -528,14 +570,15 @@ function renderOverlays(page, img) {
   });
 }
 
-// Re-position overlays on window resize so they stay aligned with the image.
+// Re-apply zoom (which also re-renders overlays) on window resize so the
+// image and bbox overlays stay aligned with the new container width.
 let resizeTimer = null;
 window.addEventListener('resize', () => {
   if (resizeTimer) clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (!state.session) return;
     const img = document.getElementById('page-img');
-    if (img.complete) renderOverlays(state.pages[state.currentPage], img);
+    if (img.complete) applyZoom();
   }, 80);
 });
 
@@ -629,6 +672,14 @@ function requestPreviewUpdate(immediate = false) {
 async function updatePreview() {
   const pno = state.currentPage;
   const canvas = document.getElementById('preview-canvas');
+
+  // If the user has toggled into "show original" compare mode, never overwrite
+  // the displayed image with an edited preview — keep the original visible.
+  if (state.viewMode === 'original') {
+    canvas.classList.remove('loading');
+    return;
+  }
+
   // Send only edits relevant to *any* page — server applies all then renders
   // the requested page. Sending all is fine; same payload as save.
   const edits = Array.from(state.edits.values());
@@ -680,7 +731,67 @@ function updateSaveButton() {
   btn.disabled = n === 0;
   status.textContent = n === 0 ? 'No changes yet'
     : `${n} edit${n === 1 ? '' : 's'} pending`;
+
+  // Compare button is only useful when there are edits to compare against.
+  const cmp = document.getElementById('compare-btn');
+  cmp.disabled = n === 0;
+  if (n === 0 && state.viewMode === 'original') {
+    // No edits -> nothing to compare; force back to edited mode.
+    state.viewMode = 'edited';
+    cmp.classList.remove('active');
+    cmp.textContent = 'Show original';
+  }
 }
+
+// ---------- zoom ----------
+function applyZoom() {
+  const img = document.getElementById('page-img');
+  const page = state.pages[state.currentPage];
+  if (!page || !img.naturalWidth) return;
+
+  if (Math.abs(state.zoom - 1.0) < 0.01) {
+    // 100% = fit to container width
+    img.style.width = '';
+    img.style.maxWidth = '100%';
+  } else {
+    const container = document.querySelector('.preview-scroll');
+    const fitWidth = Math.max(100, container.clientWidth - 32);
+    img.style.maxWidth = 'none';
+    img.style.width = `${Math.round(fitWidth * state.zoom)}px`;
+  }
+  document.getElementById('zoom-level').textContent =
+    `${Math.round(state.zoom * 100)}%`;
+  document.getElementById('zoom-out').disabled = state.zoom <= 0.5;
+  document.getElementById('zoom-in').disabled  = state.zoom >= 3.0;
+  // Re-render overlays at new scale.
+  renderOverlays(page, img);
+}
+
+function setZoom(level) {
+  state.zoom = Math.max(0.5, Math.min(3.0, level));
+  applyZoom();
+}
+
+document.getElementById('zoom-in').onclick    = () => setZoom(state.zoom + 0.25);
+document.getElementById('zoom-out').onclick   = () => setZoom(state.zoom - 0.25);
+document.getElementById('zoom-level').onclick = () => setZoom(1.0);
+
+// ---------- compare (toggle original vs edited) ----------
+document.getElementById('compare-btn').onclick = () => {
+  if (state.edits.size === 0) return;
+  const btn = document.getElementById('compare-btn');
+  if (state.viewMode === 'edited') {
+    state.viewMode = 'original';
+    btn.classList.add('active');
+    btn.textContent = 'Showing original — click for edited';
+    setPageImageSrc(`/preview/${state.session}/${state.currentPage}.png?t=${Date.now()}`);
+  } else {
+    state.viewMode = 'edited';
+    btn.classList.remove('active');
+    btn.textContent = 'Show original';
+    requestPreviewUpdate(true);
+  }
+};
 
 // ---------- save & download ----------
 document.getElementById('save-btn').onclick = async () => {
