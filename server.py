@@ -1,64 +1,171 @@
 """Flask web UI for the PDF editor.
 
-Run:  uv run python server.py
-Then open http://127.0.0.1:5050 in a browser.
+Dev:    uv run python server.py
+Prod:   ./run-prod.sh   (gunicorn, see Procfile)
 
-Endpoints:
-  GET  /                       single-page UI
-  POST /upload                 multipart PDF upload, returns spans + page sizes
-  GET  /preview/<sid>/<n>.png  render page n of session sid as a PNG
-  POST /save/<sid>             apply edits, write edited.pdf, return URL
-  GET  /download/<sid>         serve edited.pdf as an attachment
+Required env vars in production:
+  PDF_EDITOR_PASSWORD     shared password for the login screen
+  PDF_EDITOR_SECRET_KEY   any 32+ random bytes; signs session cookies
+
+Optional env vars:
+  PORT                       gunicorn bind port (default 5050)
+  PDF_SESSION_TTL_SECONDS    delete sessions older than this (default 3600)
+  PDF_MAX_SESSIONS_PER_IP    upload-rate cap (default 5)
 """
 
 from __future__ import annotations
 
-import tempfile
+import logging
+import os
+import time
 import uuid
-from pathlib import Path
 
 import fitz
-from flask import Flask, Response, abort, jsonify, request, send_file
+from flask import (Flask, Response, abort, g, jsonify, render_template,
+                   request, send_file)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
+import auth
+import payload
+import sessions
 from pdf_editor import PDFEditor, PDFInspector
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB cap
 
-SESSIONS_DIR = Path(tempfile.gettempdir()) / "pdf-editor-sessions"
-SESSIONS_DIR.mkdir(exist_ok=True)
+log = logging.getLogger("pdf-editor")
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.INFO,
+)
+
+
+def _rid() -> str:
+    """Short request ID stashed on flask.g; safe to call outside request ctx."""
+    try:
+        return getattr(g, "request_id", "-")
+    except RuntimeError:
+        return "-"
+
+
+# ---- configuration ---------------------------------------------------------
+
+SECRET_KEY = (os.environ.get("PDF_EDITOR_SECRET_KEY")
+              or "dev-only-key-change-me-in-prod-CHANGE-THIS")
+SESSION_TTL = int(os.environ.get("PDF_SESSION_TTL_SECONDS") or 3600)
+MAX_SESSIONS_PER_IP = int(os.environ.get("PDF_MAX_SESSIONS_PER_IP") or 5)
+MAX_PAGES_PER_PDF = int(os.environ.get("PDF_MAX_PAGES") or 500)
 PREVIEW_DPI = 144  # 2x of PDF's 72 DPI baseline -> retina-friendly preview
 
 
-def session_dir(sid: str) -> Path:
-    """Validate the session id and return its directory or 404/400."""
-    if len(sid) != 32 or any(c not in "0123456789abcdef" for c in sid):
-        abort(400, "invalid session id")
-    p = SESSIONS_DIR / sid
-    if not p.is_dir():
-        abort(404, "session not found")
-    return p
+# ---- app + extensions ------------------------------------------------------
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB cap
+app.config["SECRET_KEY"] = SECRET_KEY
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+if os.environ.get("PDF_EDITOR_SECURE_COOKIE"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+# Per-endpoint rate limits — preview-edited is the expensive one; uploads
+# create disk state so we cap them per IP/minute too.
+limiter = Limiter(
+    get_remote_address, app=app,
+    default_limits=["200 per minute"],
+    storage_uri="memory://",
+)
+
+
+# Wire auth + session lifecycle.
+auth.register(app, limiter)
+sessions.sweep_old(SESSION_TTL)            # one immediate pass at startup
+sessions.start_sweeper(SESSION_TTL)        # then every 5 min
+
+
+# ---- request-id middleware -------------------------------------------------
+
+@app.before_request
+def _attach_request_id():
+    g.request_id = uuid.uuid4().hex[:8]
+    g.request_started_at = time.time()
+
+
+@app.after_request
+def _log_request(resp):
+    try:
+        elapsed_ms = int((time.time() - g.request_started_at) * 1000)
+    except Exception:
+        elapsed_ms = -1
+    log.info("[%s] %s %s -> %s (%d ms)",
+             _rid(), request.method, request.path, resp.status_code, elapsed_ms)
+    return resp
+
+
+@app.errorhandler(Exception)
+def _on_unhandled(e):
+    log.exception("[%s] unhandled exception on %s %s", _rid(), request.method, request.path)
+    # Werkzeug HTTPExceptions already carry the right status — bubble those.
+    if hasattr(e, "code") and isinstance(getattr(e, "code", None), int):
+        return jsonify({"error": getattr(e, "description", str(e))}), e.code
+    return jsonify({
+        "error": "internal server error",
+        "request_id": _rid(),
+    }), 500
+
+
+@app.get("/healthz")
+def healthz():
+    """Liveness probe — no auth, no I/O."""
+    return jsonify({"ok": True})
 
 
 @app.get("/")
-def index() -> Response:
-    return Response(INDEX_HTML, mimetype="text/html; charset=utf-8")
+def index():
+    return render_template("index.html")
 
 
 @app.post("/upload")
+@limiter.limit("10 per minute")
 def upload():
     file = request.files.get("pdf")
     if not file or not file.filename or not file.filename.lower().endswith(".pdf"):
         return jsonify({"error": "Please upload a PDF file."}), 400
 
+    ip = get_remote_address()
+    if sessions.count_for_ip(ip) >= MAX_SESSIONS_PER_IP:
+        return jsonify({
+            "error": (f"Too many active sessions ({MAX_SESSIONS_PER_IP}). "
+                      "Wait a few minutes for old ones to expire, or click "
+                      "'Open another PDF' which clears the current one.")
+        }), 429
+
     sid = uuid.uuid4().hex
-    sdir = SESSIONS_DIR / sid
+    sdir = sessions.SESSIONS_DIR / sid
     sdir.mkdir()
     pdf_path = sdir / "original.pdf"
     file.save(pdf_path)
 
+    # Magic-byte check — anyone can name a file `*.pdf`. We're about to feed
+    # it to fitz which is a large C library; reject obvious non-PDFs early.
+    try:
+        with pdf_path.open("rb") as f:
+            head = f.read(5)
+    except OSError:
+        head = b""
+    if not head.startswith(b"%PDF-"):
+        sessions.delete(sid)
+        return jsonify({
+            "error": "That file does not look like a PDF (missing %PDF- header)."
+        }), 400
+
     try:
         with PDFInspector(pdf_path) as ins:
+            if ins.page_count > MAX_PAGES_PER_PDF:
+                sessions.delete(sid)
+                return jsonify({
+                    "error": (f"PDF has {ins.page_count} pages — limit is "
+                              f"{MAX_PAGES_PER_PDF}. Split the file before uploading.")
+                }), 413
             pages = []
             for pno in range(ins.page_count):
                 page = ins.doc[pno]
@@ -70,8 +177,13 @@ def upload():
                     "spans": spans,
                 })
     except Exception as e:
+        log.warning("[%s] could not read PDF: %s", _rid(), e)
+        sessions.delete(sid)
         return jsonify({"error": f"Could not read PDF: {e}"}), 400
 
+    sessions.track(sid, ip)
+    log.info("[%s] new session %s (%d page%s, ip=%s)",
+             _rid(), sid, len(pages), "" if len(pages) == 1 else "s", ip)
     return jsonify({
         "session": sid,
         "filename": file.filename,
@@ -82,7 +194,7 @@ def upload():
 
 @app.get("/preview/<sid>/<int:page>.png")
 def preview(sid: str, page: int):
-    sdir = session_dir(sid)
+    sdir = sessions.session_dir(sid)
     doc = fitz.open(sdir / "original.pdf")
     if page < 0 or page >= len(doc):
         doc.close()
@@ -94,72 +206,151 @@ def preview(sid: str, page: int):
                     headers={"Cache-Control": "no-store"})
 
 
-def _parse_edits(raw_edits) -> list[tuple[int, tuple[float, float, float, float], str]]:
-    """Validate and convert the JSON edits payload to typed tuples."""
-    out: list[tuple[int, tuple[float, float, float, float], str]] = []
-    for e in raw_edits:
-        try:
-            page = int(e["page"])
-            bbox = tuple(float(x) for x in e["bbox"])
-            new_text = str(e["new_text"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"malformed edit {e!r}: {exc}") from None
-        if len(bbox) != 4:
-            raise ValueError(f"bbox must have 4 numbers: {e!r}")
-        out.append((page, bbox, new_text))
-    return out
+@app.post("/ocr/<sid>/<int:page>")
+@limiter.limit("5 per minute")
+def ocr_page(sid: str, page: int):
+    """Run OCR on a page (typically used when the page is a scanned image
+    with no extractable text). Returns spans in the same shape as upload's
+    page.spans so the UI can render them as editable items.
+
+    Requires tesseract — `brew install tesseract` on macOS,
+    `apt install tesseract-ocr` on Debian/Ubuntu.
+    """
+    sdir = sessions.session_dir(sid)
+    doc = fitz.open(sdir / "original.pdf")
+    if page < 0 or page >= len(doc):
+        doc.close()
+        abort(404, "page out of range")
+
+    try:
+        tp = doc[page].get_textpage_ocr(language="eng", dpi=200, full=True)
+    except RuntimeError as e:
+        doc.close()
+        # Tesseract not found / not usable
+        return jsonify({
+            "error": ("OCR is not available on this server. Install tesseract: "
+                      "`brew install tesseract` on macOS, "
+                      "`apt install tesseract-ocr` on Debian/Ubuntu, "
+                      f"then restart the server. ({e})")
+        }), 503
+    except Exception as e:
+        doc.close()
+        return jsonify({"error": f"OCR failed: {e}"}), 500
+
+    spans = []
+    for block in doc[page].get_text("dict", textpage=tp).get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                spans.append({
+                    "page": page,
+                    "text": span.get("text", ""),
+                    "font": "OCR",
+                    "size": float(span.get("size", 11)),
+                    "color": int(span.get("color", 0)),
+                    "color_hex": "#000000",
+                    "flags": int(span.get("flags", 0)),
+                    "bbox": list(span.get("bbox", [0, 0, 0, 0])),
+                    "origin": list(span.get("origin", [0, 0])),
+                    "ascender": float(span.get("ascender", 0.0)),
+                    "descender": float(span.get("descender", 0.0)),
+                    "style": "ocr",
+                    "is_ocr": True,
+                })
+    doc.close()
+    return jsonify({"spans": spans})
+
+
+@app.get("/thumb/<sid>/<int:page>.png")
+def thumb(sid: str, page: int):
+    """Tiny rendering of a page for the sidebar thumbnails strip."""
+    sdir = sessions.session_dir(sid)
+    doc = fitz.open(sdir / "original.pdf")
+    if page < 0 or page >= len(doc):
+        doc.close()
+        abort(404, "page out of range")
+    # 36 DPI = exactly 50% the natural PDF size; ~150px tall page is enough.
+    pix = doc[page].get_pixmap(dpi=36, alpha=False)
+    png = pix.tobytes("png")
+    doc.close()
+    return Response(png, mimetype="image/png",
+                    headers={"Cache-Control": "public, max-age=300"})
+
 
 
 @app.post("/save/<sid>")
+@limiter.limit("20 per minute")
 def save(sid: str):
-    sdir = session_dir(sid)
+    sdir = sessions.session_dir(sid)
     body = request.get_json(silent=True) or {}
-    raw_edits = body.get("edits") or []
-    if not raw_edits:
+    raw_edits  = body.get("edits")  or []
+    raw_adds   = body.get("adds")   or []
+    raw_images = body.get("images") or []
+    if not raw_edits and not raw_adds and not raw_images:
         return jsonify({"error": "no edits to apply"}), 400
 
     try:
-        edit_tuples = _parse_edits(raw_edits)
+        edit_tuples   = payload.parse_edits(raw_edits)
+        add_dicts     = payload.parse_adds(raw_adds)
+        image_inserts = payload.parse_image_inserts(raw_images)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
     out_path = sdir / "edited.pdf"
-    with PDFEditor(sdir / "original.pdf") as ed:
-        applied = ed.replace_spans(edit_tuples)
-        ed.save(out_path)
-        warnings = list(ed.warnings)
+    try:
+        with PDFEditor(sdir / "original.pdf") as ed:
+            applied = payload.apply_to_editor(ed, edit_tuples, add_dicts, image_inserts)
+            ed.save(out_path)
+            warnings = list(ed.warnings)
+    except Exception as e:
+        log.exception("[%s] save failed for session %s", _rid(), sid)
+        return jsonify({
+            "error": f"Save failed while applying edits: {e}",
+            "request_id": _rid(),
+        }), 500
 
     return jsonify({
         "applied": applied,
-        "requested": len(edit_tuples),
+        "requested": len(edit_tuples) + len(add_dicts) + len(image_inserts),
         "warnings": warnings,
         "download_url": f"/download/{sid}",
     })
 
 
 @app.post("/preview-edited/<sid>/<int:page>.png")
+@limiter.limit("60 per minute")
 def preview_edited(sid: str, page: int):
     """Apply pending edits in memory and return a PNG of the requested page.
 
     The frontend hits this whenever the user types so they can see the result
     without downloading. We do NOT save edited.pdf — this is a preview only.
     """
-    sdir = session_dir(sid)
+    sdir = sessions.session_dir(sid)
     body = request.get_json(silent=True) or {}
-    raw_edits = body.get("edits") or []
+    raw_edits  = body.get("edits")  or []
+    raw_adds   = body.get("adds")   or []
+    raw_images = body.get("images") or []
 
     try:
-        edit_tuples = _parse_edits(raw_edits)
+        edit_tuples   = payload.parse_edits(raw_edits)
+        add_dicts     = payload.parse_adds(raw_adds)
+        image_inserts = payload.parse_image_inserts(raw_images)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
-    with PDFEditor(sdir / "original.pdf") as ed:
-        if edit_tuples:
-            ed.replace_spans(edit_tuples)
-        if page < 0 or page >= len(ed.doc):
-            return jsonify({"error": "page out of range"}), 404
-        pix = ed.doc[page].get_pixmap(dpi=PREVIEW_DPI, alpha=False)
-        png = pix.tobytes("png")
+    try:
+        with PDFEditor(sdir / "original.pdf") as ed:
+            payload.apply_to_editor(ed, edit_tuples, add_dicts, image_inserts)
+            if page < 0 or page >= len(ed.doc):
+                return jsonify({"error": "page out of range"}), 404
+            pix = ed.doc[page].get_pixmap(dpi=PREVIEW_DPI, alpha=False)
+            png = pix.tobytes("png")
+    except Exception as e:
+        log.warning("[%s] preview-edited failed for session %s: %s",
+                    _rid(), sid, e)
+        return jsonify({"error": f"Preview failed: {e}",
+                        "request_id": _rid()}), 500
 
     return Response(png, mimetype="image/png",
                     headers={"Cache-Control": "no-store"})
@@ -167,7 +358,7 @@ def preview_edited(sid: str, page: int):
 
 @app.get("/download/<sid>")
 def download(sid: str):
-    sdir = session_dir(sid)
+    sdir = sessions.session_dir(sid)
     edited = sdir / "edited.pdf"
     if not edited.exists():
         abort(404, "no edited PDF for this session yet")
@@ -176,671 +367,15 @@ def download(sid: str):
                      mimetype="application/pdf")
 
 
-# ----------------------------------------------------------------------------
-# Single-page UI — vanilla JS, no framework, no build step.
-# ----------------------------------------------------------------------------
+@app.post("/sessions/<sid>")
+def session_delete(sid: str):
+    """Delete a session early (called when user clicks 'Open another PDF')."""
+    sessions.delete(sid)
+    return jsonify({"deleted": True})
 
-INDEX_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PDF Editor</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: #1d1d1f; background: #f5f5f7; display: flex; flex-direction: column;
-  }
-  /* The hidden attribute should remove an element from layout. Our flex
-     children carry display:flex which would override that — make sure the
-     hidden attribute always wins. */
-  [hidden] { display: none !important; }
-  header {
-    background: white; border-bottom: 1px solid #e5e5e7;
-    padding: 12px 20px; display: flex; align-items: center; gap: 14px;
-    flex-shrink: 0;
-  }
-  header h1 { font-size: 17px; font-weight: 600; }
-  header .file-info { color: #86868b; font-size: 13px; flex: 1; }
 
-  .btn {
-    background: #007aff; color: white; border: none; padding: 8px 16px;
-    border-radius: 7px; font-size: 14px; cursor: pointer; font-weight: 500;
-    transition: background 0.1s;
-  }
-  .btn:hover:not(:disabled) { background: #0066d6; }
-  .btn:disabled { background: #c7c7cc; cursor: not-allowed; }
-  .btn.secondary { background: #f0f0f3; color: #1d1d1f; }
-  .btn.secondary:hover:not(:disabled) { background: #e5e5e7; }
 
-  /* Upload pane */
-  #upload-pane {
-    flex: 1; display: flex; align-items: center; justify-content: center;
-    padding: 40px;
-  }
-  .drop-zone {
-    background: white; border: 2px dashed #c7c7cc; border-radius: 14px;
-    padding: 56px 80px; text-align: center; max-width: 520px;
-    transition: all 0.15s; cursor: pointer;
-  }
-  .drop-zone:hover, .drop-zone.dragover {
-    border-color: #007aff; background: #f0f7ff;
-  }
-  .drop-zone h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
-  .drop-zone p { color: #86868b; margin-bottom: 22px; font-size: 14px; }
-  .drop-zone input[type="file"] { display: none; }
-  .alert { padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-top: 16px; }
-  .alert.error { background: #ffebee; color: #c62828; }
-  .alert.success { background: #e8f5e9; color: #2e7d32; }
 
-  /* Editor pane */
-  #editor-pane {
-    flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 420px;
-    gap: 14px; padding: 14px; min-height: 0;
-  }
-
-  .panel {
-    background: white; border-radius: 10px; padding: 14px;
-    display: flex; flex-direction: column; min-height: 0;
-  }
-
-  .preview-toolbar {
-    display: flex; gap: 8px; margin-bottom: 12px; align-items: center;
-    flex-shrink: 0; flex-wrap: wrap;
-  }
-  .preview-toolbar .spacer { flex: 1; }
-  .page-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-  .page-tab {
-    padding: 5px 11px; border-radius: 6px; background: #f0f0f3;
-    cursor: pointer; font-size: 13px; user-select: none;
-  }
-  .page-tab.active { background: #007aff; color: white; }
-  .toolbar-group {
-    display: inline-flex; align-items: center; gap: 0;
-    background: #f0f0f3; border-radius: 7px; padding: 2px;
-  }
-  .toolbar-btn {
-    background: transparent; border: none; padding: 4px 9px;
-    font-size: 13px; cursor: pointer; border-radius: 5px;
-    color: #1d1d1f; min-width: 28px; user-select: none;
-    transition: background 0.1s;
-  }
-  .toolbar-btn:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
-  .toolbar-btn:disabled { color: #c7c7cc; cursor: not-allowed; }
-  .zoom-level {
-    font-size: 12px; color: #1d1d1f; min-width: 42px;
-    text-align: center; user-select: none; font-feature-settings: "tnum";
-  }
-  .compare-btn {
-    background: #f0f0f3; color: #1d1d1f; border: none;
-    padding: 6px 12px; border-radius: 7px; font-size: 13px;
-    cursor: pointer; font-weight: 500;
-  }
-  .compare-btn:hover:not(:disabled) { background: #e5e5e7; }
-  .compare-btn.active { background: #ff9f0a; color: white; }
-  .compare-btn:disabled { background: #f5f5f7; color: #c7c7cc; cursor: not-allowed; }
-
-  .preview-scroll { flex: 1; overflow: auto; display: flex; justify-content: center; }
-  .preview-canvas { position: relative; display: inline-block; }
-  .preview-canvas img {
-    display: block; max-width: 100%; height: auto;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-    transition: opacity 0.15s;
-  }
-  .preview-canvas.loading img { opacity: 0.55; }
-  .preview-spinner {
-    position: absolute; top: 14px; right: 14px; padding: 4px 10px;
-    border-radius: 99px; background: rgba(0,0,0,0.65); color: white;
-    font-size: 11px; font-weight: 500; opacity: 0;
-    transition: opacity 0.15s; pointer-events: none;
-  }
-  .preview-canvas.loading .preview-spinner { opacity: 1; }
-  .preview-stale-banner {
-    background: #fff8e7; color: #7a5800; border: 1px solid #ffd66b;
-    padding: 6px 10px; border-radius: 6px; font-size: 12px;
-    margin-bottom: 8px; display: none;
-  }
-  .preview-stale-banner.visible { display: block; }
-  .span-overlay {
-    position: absolute; border: 1px solid transparent; cursor: pointer;
-    transition: background 0.1s, border-color 0.1s;
-  }
-  .span-overlay:hover {
-    background: rgba(0, 122, 255, 0.12);
-    border-color: rgba(0, 122, 255, 0.45);
-  }
-  .span-overlay.active {
-    background: rgba(0, 122, 255, 0.18);
-    border-color: #007aff;
-  }
-  .span-overlay.dirty {
-    background: rgba(255, 159, 10, 0.15);
-    border-color: rgba(255, 159, 10, 0.7);
-  }
-
-  .spans-header {
-    display: flex; align-items: baseline; justify-content: space-between;
-    margin-bottom: 10px; flex-shrink: 0;
-  }
-  .spans-header h3 {
-    font-size: 12px; text-transform: uppercase; color: #86868b;
-    letter-spacing: 0.6px; font-weight: 600;
-  }
-  .spans-header .count { font-size: 12px; color: #86868b; }
-
-  .spans-list { flex: 1; overflow-y: auto; }
-  .span-card {
-    padding: 9px 11px; border-radius: 7px; border: 1px solid transparent;
-    margin-bottom: 6px; transition: all 0.1s;
-  }
-  .span-card:hover { background: #fafafa; }
-  .span-card.active { border-color: #007aff; background: #f0f7ff; }
-  .span-card.dirty { border-color: #ff9f0a; background: #fff8e7; }
-  .span-meta {
-    font-size: 11px; color: #86868b; margin-bottom: 5px;
-    display: flex; align-items: center; gap: 6px; font-feature-settings: "tnum";
-  }
-  .color-swatch {
-    width: 11px; height: 11px; border-radius: 2px;
-    border: 1px solid rgba(0,0,0,0.1); display: inline-block; flex-shrink: 0;
-  }
-  .span-input {
-    width: 100%; padding: 6px 9px; border: 1px solid #d1d1d6;
-    border-radius: 5px; font-size: 13px; font-family: inherit;
-    background: white;
-  }
-  .span-input:focus { outline: none; border-color: #007aff; }
-
-  .toolbar {
-    display: flex; gap: 10px; align-items: center;
-    padding-top: 12px; border-top: 1px solid #e5e5e7; margin-top: 10px;
-    flex-shrink: 0;
-  }
-  .toolbar .status { color: #86868b; font-size: 13px; flex: 1; }
-  .toolbar .status.error { color: #c62828; }
-  .toolbar .status.success { color: #2e7d32; }
-</style>
-</head>
-<body>
-
-<header>
-  <h1>PDF Editor</h1>
-  <span class="file-info" id="file-info">Inspect, edit and download PDFs while keeping the original look.</span>
-  <button class="btn secondary" id="new-pdf-btn" hidden>Open another PDF</button>
-</header>
-
-<main id="upload-pane">
-  <div class="drop-zone" id="drop-zone">
-    <h2>Drop a PDF here</h2>
-    <p>or click to browse</p>
-    <input type="file" id="file-input" accept="application/pdf">
-    <button class="btn" id="browse-btn">Choose PDF</button>
-    <div class="alert error" id="upload-error" hidden></div>
-  </div>
-</main>
-
-<main id="editor-pane" hidden>
-  <section class="panel preview-section">
-    <div class="preview-toolbar">
-      <div class="page-tabs" id="page-tabs"></div>
-      <div class="spacer"></div>
-      <div class="toolbar-group" title="Zoom">
-        <button class="toolbar-btn" id="zoom-out" aria-label="Zoom out">&minus;</button>
-        <button class="toolbar-btn zoom-level" id="zoom-level" title="Reset to fit">100%</button>
-        <button class="toolbar-btn" id="zoom-in"  aria-label="Zoom in">+</button>
-      </div>
-      <button class="compare-btn" id="compare-btn" disabled
-              title="Hold to see the original PDF without your edits">
-        Show original
-      </button>
-    </div>
-    <div class="preview-scroll">
-      <div class="preview-canvas" id="preview-canvas">
-        <img id="page-img" alt="">
-        <div class="preview-spinner">updating preview&hellip;</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="panel spans-section">
-    <div class="spans-header">
-      <h3>Editable text on this page</h3>
-      <span class="count" id="span-count"></span>
-    </div>
-    <div class="spans-list" id="spans-list"></div>
-    <div class="toolbar">
-      <span class="status" id="save-status">No changes yet</span>
-      <button class="btn" id="save-btn" disabled>Save &amp; Download</button>
-    </div>
-  </section>
-</main>
-
-<script>
-"use strict";
-
-const state = {
-  session: null,
-  pages: [],
-  currentPage: 0,
-  edits: new Map(),     // key = "page:bbox" -> {page, bbox, new_text}
-  previewDpi: 144,
-  zoom: 1.0,            // 1.0 = fit-to-container, otherwise multiplier
-  viewMode: 'edited',   // 'edited' or 'original' (compare toggle)
-};
-
-// ---------- upload ----------
-const dropZone   = document.getElementById('drop-zone');
-const fileInput  = document.getElementById('file-input');
-const browseBtn  = document.getElementById('browse-btn');
-const uploadErr  = document.getElementById('upload-error');
-
-browseBtn.onclick = (e) => { e.stopPropagation(); fileInput.click(); };
-dropZone.onclick = () => fileInput.click();
-fileInput.onchange = () => fileInput.files[0] && uploadFile(fileInput.files[0]);
-
-['dragenter', 'dragover'].forEach(ev => dropZone.addEventListener(ev, (e) => {
-  e.preventDefault(); dropZone.classList.add('dragover');
-}));
-['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, (e) => {
-  e.preventDefault(); dropZone.classList.remove('dragover');
-}));
-dropZone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  const f = e.dataTransfer.files[0];
-  if (f) uploadFile(f);
-});
-
-async function uploadFile(file) {
-  uploadErr.hidden = true;
-  if (!file.name.toLowerCase().endsWith('.pdf')) {
-    return showError("That doesn't look like a PDF.");
-  }
-  const fd = new FormData();
-  fd.append('pdf', file);
-  try {
-    const r = await fetch('/upload', { method: 'POST', body: fd });
-    const data = await r.json();
-    if (!r.ok) return showError(data.error || 'Upload failed');
-    loadEditor(data, file.name);
-  } catch (e) {
-    showError('Network error: ' + e.message);
-  }
-}
-function showError(msg) { uploadErr.textContent = msg; uploadErr.hidden = false; }
-
-// ---------- editor boot ----------
-function loadEditor(data, filename) {
-  state.session    = data.session;
-  state.pages      = data.pages;
-  state.previewDpi = data.preview_dpi;
-  state.currentPage = 0;
-  state.edits = new Map();
-
-  document.getElementById('file-info').textContent =
-    `${filename}  ·  ${data.pages.length} page${data.pages.length === 1 ? '' : 's'}`;
-  document.getElementById('upload-pane').hidden = true;
-  document.getElementById('editor-pane').hidden = false;
-  document.getElementById('new-pdf-btn').hidden = false;
-
-  renderPageTabs();
-  renderPage(0);
-}
-
-function renderPageTabs() {
-  const wrap = document.getElementById('page-tabs');
-  wrap.innerHTML = '';
-  if (state.pages.length <= 1) return;
-  state.pages.forEach((p, i) => {
-    const tab = document.createElement('div');
-    tab.className = 'page-tab' + (i === state.currentPage ? ' active' : '');
-    tab.textContent = `Page ${i + 1}`;
-    tab.onclick = () => renderPage(i);
-    wrap.appendChild(tab);
-  });
-}
-
-function renderPage(pno) {
-  state.currentPage = pno;
-  renderPageTabs();
-  const page = state.pages[pno];
-
-  // Render spans list once per page change. The image src may swap many times
-  // (each preview update) — only overlays should re-render on img load.
-  renderSpansList(page);
-
-  const img = document.getElementById('page-img');
-  img.onload = () => { applyZoom(); renderOverlays(page, img); };
-
-  // If we have edits for this page and we're in edited mode, show the edited
-  // preview right away; otherwise show the original.
-  if (state.viewMode === 'edited' && hasEditsOnPage(pno)) {
-    requestPreviewUpdate(true);
-  } else {
-    setPageImageSrc(`/preview/${state.session}/${pno}.png?t=${Date.now()}`);
-  }
-}
-
-function hasEditsOnPage(pno) {
-  for (const e of state.edits.values()) if (e.page === pno) return true;
-  return false;
-}
-
-// Track the current blob URL so we can revoke it when swapping to a new one.
-let currentPreviewBlobUrl = null;
-function setPageImageSrc(src) {
-  const img = document.getElementById('page-img');
-  if (currentPreviewBlobUrl) {
-    URL.revokeObjectURL(currentPreviewBlobUrl);
-    currentPreviewBlobUrl = null;
-  }
-  img.src = src;
-}
-function setPageImageBlob(blob) {
-  const url = URL.createObjectURL(blob);
-  if (currentPreviewBlobUrl) URL.revokeObjectURL(currentPreviewBlobUrl);
-  currentPreviewBlobUrl = url;
-  document.getElementById('page-img').src = url;
-}
-
-function spanKey(span) {
-  return span.page + ':' + span.bbox.map(x => x.toFixed(2)).join(',');
-}
-
-// ---------- overlays on the rendered page ----------
-function renderOverlays(page, img) {
-  const canvas = document.getElementById('preview-canvas');
-  canvas.querySelectorAll('.span-overlay').forEach(el => el.remove());
-
-  const scale = img.clientWidth / page.width;
-  page.spans.forEach((span, idx) => {
-    const div = document.createElement('div');
-    div.className = 'span-overlay';
-    if (state.edits.has(spanKey(span))) div.classList.add('dirty');
-    div.dataset.idx = idx;
-    const [x0, y0, x1, y1] = span.bbox;
-    div.style.left   = (x0 * scale) + 'px';
-    div.style.top    = (y0 * scale) + 'px';
-    div.style.width  = ((x1 - x0) * scale) + 'px';
-    div.style.height = ((y1 - y0) * scale) + 'px';
-    div.title = span.text;
-    div.onclick = () => focusSpan(idx);
-    canvas.appendChild(div);
-  });
-}
-
-// Re-apply zoom (which also re-renders overlays) on window resize so the
-// image and bbox overlays stay aligned with the new container width.
-let resizeTimer = null;
-window.addEventListener('resize', () => {
-  if (resizeTimer) clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (!state.session) return;
-    const img = document.getElementById('page-img');
-    if (img.complete) applyZoom();
-  }, 80);
-});
-
-// ---------- spans list ----------
-function renderSpansList(page) {
-  const list = document.getElementById('spans-list');
-  list.innerHTML = '';
-  document.getElementById('span-count').textContent =
-    `${page.spans.length} span${page.spans.length === 1 ? '' : 's'}`;
-
-  // Sort spans by reading order: top-to-bottom, then left-to-right.
-  const ordered = page.spans.map((s, i) => ({s, i})).sort((a, b) => {
-    if (Math.abs(a.s.bbox[1] - b.s.bbox[1]) > 4) return a.s.bbox[1] - b.s.bbox[1];
-    return a.s.bbox[0] - b.s.bbox[0];
-  });
-
-  ordered.forEach(({s: span, i: idx}) => {
-    const card = document.createElement('div');
-    card.className = 'span-card';
-    card.dataset.idx = idx;
-    const k = spanKey(span);
-    if (state.edits.has(k)) card.classList.add('dirty');
-
-    const meta = document.createElement('div');
-    meta.className = 'span-meta';
-    const swatch = document.createElement('span');
-    swatch.className = 'color-swatch';
-    swatch.style.background = span.color_hex;
-    meta.appendChild(swatch);
-    const label = document.createElement('span');
-    label.textContent =
-      `${span.font} · ${span.size}pt · ${span.color_hex} · ${span.style}`;
-    meta.appendChild(label);
-
-    const input = document.createElement('input');
-    input.className = 'span-input';
-    input.type = 'text';
-    input.value = state.edits.get(k)?.new_text ?? span.text;
-    input.onfocus = () => activateSpan(idx);
-    input.oninput = (e) => recordEdit(span, e.target.value, card);
-
-    card.appendChild(meta);
-    card.appendChild(input);
-    card.onclick = (e) => { if (e.target === card) activateSpan(idx); };
-    list.appendChild(card);
-  });
-  updateSaveButton();
-}
-
-function activateSpan(idx) {
-  document.querySelectorAll('.span-overlay.active, .span-card.active')
-    .forEach(el => el.classList.remove('active'));
-  document.querySelectorAll(`[data-idx="${idx}"]`)
-    .forEach(el => el.classList.add('active'));
-  const card = document.querySelector(`.span-card[data-idx="${idx}"]`);
-  if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-}
-function focusSpan(idx) {
-  activateSpan(idx);
-  const input = document.querySelector(`.span-card[data-idx="${idx}"] .span-input`);
-  if (input) { input.focus(); input.select(); }
-}
-
-function recordEdit(span, newText, card) {
-  const k = spanKey(span);
-  const overlay = document.querySelector(
-    `.span-overlay[data-idx="${card.dataset.idx}"]`);
-  if (newText === span.text) {
-    state.edits.delete(k);
-    card.classList.remove('dirty');
-    overlay && overlay.classList.remove('dirty');
-  } else {
-    state.edits.set(k, { page: span.page, bbox: span.bbox, new_text: newText });
-    card.classList.add('dirty');
-    overlay && overlay.classList.add('dirty');
-  }
-  updateSaveButton();
-  requestPreviewUpdate();
-}
-
-// ---------- live preview ----------
-let previewTimer = null;
-let previewController = null;
-let previewSeq = 0;  // monotonic — used to ignore stale responses
-
-function requestPreviewUpdate(immediate = false) {
-  if (previewTimer) clearTimeout(previewTimer);
-  previewTimer = setTimeout(updatePreview, immediate ? 0 : 600);
-}
-
-async function updatePreview() {
-  const pno = state.currentPage;
-  const canvas = document.getElementById('preview-canvas');
-
-  // If the user has toggled into "show original" compare mode, never overwrite
-  // the displayed image with an edited preview — keep the original visible.
-  if (state.viewMode === 'original') {
-    canvas.classList.remove('loading');
-    return;
-  }
-
-  // Send only edits relevant to *any* page — server applies all then renders
-  // the requested page. Sending all is fine; same payload as save.
-  const edits = Array.from(state.edits.values());
-
-  if (edits.length === 0) {
-    // No edits anywhere — show the cached original PNG.
-    canvas.classList.remove('loading');
-    setPageImageSrc(`/preview/${state.session}/${pno}.png?t=${Date.now()}`);
-    return;
-  }
-
-  // Cancel a still-in-flight previous request.
-  if (previewController) previewController.abort();
-  previewController = new AbortController();
-  const mySeq = ++previewSeq;
-
-  canvas.classList.add('loading');
-  try {
-    const r = await fetch(
-      `/preview-edited/${state.session}/${pno}.png`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ edits }),
-        signal: previewController.signal,
-      }
-    );
-    if (mySeq !== previewSeq) return;  // a newer request started
-    if (!r.ok) {
-      console.error('preview failed', r.status);
-      canvas.classList.remove('loading');
-      return;
-    }
-    const blob = await r.blob();
-    if (mySeq !== previewSeq) return;
-    setPageImageBlob(blob);
-  } catch (e) {
-    if (e.name !== 'AbortError') console.error('preview error', e);
-  } finally {
-    if (mySeq === previewSeq) canvas.classList.remove('loading');
-  }
-}
-
-function updateSaveButton() {
-  const btn = document.getElementById('save-btn');
-  const status = document.getElementById('save-status');
-  status.className = 'status';
-  const n = state.edits.size;
-  btn.disabled = n === 0;
-  status.textContent = n === 0 ? 'No changes yet'
-    : `${n} edit${n === 1 ? '' : 's'} pending`;
-
-  // Compare button is only useful when there are edits to compare against.
-  const cmp = document.getElementById('compare-btn');
-  cmp.disabled = n === 0;
-  if (n === 0 && state.viewMode === 'original') {
-    // No edits -> nothing to compare; force back to edited mode.
-    state.viewMode = 'edited';
-    cmp.classList.remove('active');
-    cmp.textContent = 'Show original';
-  }
-}
-
-// ---------- zoom ----------
-function applyZoom() {
-  const img = document.getElementById('page-img');
-  const page = state.pages[state.currentPage];
-  if (!page || !img.naturalWidth) return;
-
-  if (Math.abs(state.zoom - 1.0) < 0.01) {
-    // 100% = fit to container width
-    img.style.width = '';
-    img.style.maxWidth = '100%';
-  } else {
-    const container = document.querySelector('.preview-scroll');
-    const fitWidth = Math.max(100, container.clientWidth - 32);
-    img.style.maxWidth = 'none';
-    img.style.width = `${Math.round(fitWidth * state.zoom)}px`;
-  }
-  document.getElementById('zoom-level').textContent =
-    `${Math.round(state.zoom * 100)}%`;
-  document.getElementById('zoom-out').disabled = state.zoom <= 0.5;
-  document.getElementById('zoom-in').disabled  = state.zoom >= 3.0;
-  // Re-render overlays at new scale.
-  renderOverlays(page, img);
-}
-
-function setZoom(level) {
-  state.zoom = Math.max(0.5, Math.min(3.0, level));
-  applyZoom();
-}
-
-document.getElementById('zoom-in').onclick    = () => setZoom(state.zoom + 0.25);
-document.getElementById('zoom-out').onclick   = () => setZoom(state.zoom - 0.25);
-document.getElementById('zoom-level').onclick = () => setZoom(1.0);
-
-// ---------- compare (toggle original vs edited) ----------
-document.getElementById('compare-btn').onclick = () => {
-  if (state.edits.size === 0) return;
-  const btn = document.getElementById('compare-btn');
-  if (state.viewMode === 'edited') {
-    state.viewMode = 'original';
-    btn.classList.add('active');
-    btn.textContent = 'Showing original — click for edited';
-    setPageImageSrc(`/preview/${state.session}/${state.currentPage}.png?t=${Date.now()}`);
-  } else {
-    state.viewMode = 'edited';
-    btn.classList.remove('active');
-    btn.textContent = 'Show original';
-    requestPreviewUpdate(true);
-  }
-};
-
-// ---------- save & download ----------
-document.getElementById('save-btn').onclick = async () => {
-  const btn = document.getElementById('save-btn');
-  const status = document.getElementById('save-status');
-  btn.disabled = true;
-  status.className = 'status';
-  status.textContent = 'Saving...';
-
-  try {
-    const r = await fetch(`/save/${state.session}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ edits: Array.from(state.edits.values()) }),
-    });
-    const data = await r.json();
-    if (!r.ok) {
-      status.classList.add('error');
-      status.textContent = 'Error: ' + (data.error || 'save failed');
-      btn.disabled = false;
-      return;
-    }
-    // Trigger download without navigating away.
-    const a = document.createElement('a');
-    a.href = data.download_url;
-    a.download = 'edited.pdf';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-
-    status.classList.add('success');
-    let msg = `Applied ${data.applied} of ${data.requested} edit(s). Downloading…`;
-    if (data.warnings && data.warnings.length) {
-      msg += ` (${data.warnings.length} warning${data.warnings.length === 1 ? '' : 's'})`;
-    }
-    status.textContent = msg;
-    btn.disabled = false;
-  } catch (e) {
-    status.classList.add('error');
-    status.textContent = 'Network error: ' + e.message;
-    btn.disabled = false;
-  }
-};
-
-document.getElementById('new-pdf-btn').onclick = () => location.reload();
-</script>
-</body>
-</html>
-"""
 
 
 if __name__ == "__main__":

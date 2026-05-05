@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Editor</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+
+<header>
+  <h1>PDF Editor</h1>
+  <span class="file-info" id="file-info">Inspect, edit and download PDFs while keeping the original look.</span>
+  <div class="mobile-tabs" id="mobile-tabs" hidden>
+    <button id="mob-tab-preview" class="active" type="button">Preview</button>
+    <button id="mob-tab-edit"    type="button">Edit</button>
+  </div>
+  <button class="theme-toggle" id="theme-toggle" type="button"
+          title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+  <button class="btn secondary" id="new-pdf-btn" hidden>Open another PDF</button>
+</header>
+
+<main id="upload-pane">
+  <div class="drop-zone" id="drop-zone">
+    <h2>Drop a PDF here</h2>
+    <p>or click to browse</p>
+    <input type="file" id="file-input" accept="application/pdf">
+    <button class="btn" id="browse-btn">Choose PDF</button>
+    <div class="alert error" id="upload-error" hidden></div>
+  </div>
+</main>
+
+<main id="editor-pane" hidden>
+  <aside class="thumb-rail" id="thumb-rail"></aside>
+  <section class="panel preview-section">
+    <div class="preview-toolbar">
+      <div class="page-tabs" id="page-tabs"></div>
+      <div class="spacer"></div>
+      <div class="toolbar-group" title="Zoom">
+        <button class="toolbar-btn" id="zoom-out" aria-label="Zoom out">&minus;</button>
+        <button class="toolbar-btn zoom-level" id="zoom-level" title="Reset to fit">100%</button>
+        <button class="toolbar-btn" id="zoom-in"  aria-label="Zoom in">+</button>
+      </div>
+      <button class="compare-btn" id="add-text-btn" type="button"
+              title="Click on the page to add new text">
+        + Add text
+      </button>
+      <button class="compare-btn" id="insert-image-btn" type="button"
+              title="Click on the page, then choose an image file (signature, logo, etc.)">
+        + Insert image
+      </button>
+      <input type="file" id="image-file-input" accept="image/*" style="display:none">
+      </input>
+      <button class="compare-btn" id="compare-btn" disabled
+              title="Hold to see the original PDF without your edits">
+        Show original
+      </button>
+    </div>
+    <div class="preview-scroll">
+      <div class="preview-canvas" id="preview-canvas">
+        <img id="page-img" alt="">
+        <div class="preview-spinner">updating preview&hellip;</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel spans-section">
+    <div class="spans-header">
+      <h3>Editable text on this page</h3>
+      <span class="count" id="span-count"></span>
+    </div>
+    <input type="text" class="span-search" id="span-search"
+           placeholder="Filter spans by text…" autocomplete="off">
+    <div class="ocr-prompt" id="ocr-prompt" hidden>
+      <p>This page has no extractable text — likely a scanned image.</p>
+      <button class="btn" id="ocr-btn" type="button">Run OCR on this page</button>
+      <div class="ocr-status" id="ocr-status"></div>
+    </div>
+    <div class="spans-list" id="spans-list"></div>
+    <div class="diff-summary" id="diff-summary" hidden></div>
+    <div class="toolbar">
+      <span class="status" id="save-status">No changes yet</span>
+      <button class="btn" id="save-btn" disabled>Save &amp; Download</button>
+    </div>
+  </section>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
