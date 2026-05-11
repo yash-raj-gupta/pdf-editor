@@ -22,11 +22,32 @@ what to do as traffic grows. Keep it up to date.
   (e.g. you typed `M` but Stripe's heading subset only has `April`'s
   letters), only that character drops to a system fallback font. The rest
   of the line stays in the original face.
-- System font matching: on first use, scans `/System/Library/Fonts`,
-  `/Library/Fonts`, `~/Library/Fonts` (and Linux equivalents), plus the
-  project's `fonts/` dir, indexes by PostScript name and family. So
-  `Inter-SemiBold` in the PDF resolves to your installed Inter SemiBold if
-  present.
+- System font matching: on first use, scans `fonts/` (project-local,
+  highest priority), `/System/Library/Fonts`, `/Library/Fonts`,
+  `~/Library/Fonts` (and Linux equivalents), indexes by PostScript name
+  and family. So `Inter-SemiBold` in the PDF resolves to the bundled
+  `fonts/Inter-SemiBold.ttf` even on a fresh Linux deploy with nothing
+  else installed.
+- **15 common PDF font families are bundled** in `fonts/` (~2.9 MB of
+  static TTFs, all OFL or Apache-2.0). Re-run `scripts/bundle_fonts.py`
+  any time to refresh from upstream or add new families — the script is
+  idempotent and skips files that already exist. Currently covers:
+
+  | Use case | Family |
+  |---|---|
+  | Stripe / Linear / Vercel / modern SaaS | Inter |
+  | Google Workspace (Forms, Docs PDF exports) | Roboto |
+  | Atlassian / many marketing PDFs | Open Sans |
+  | Notion exports, indie SaaS | Lato |
+  | Adobe Acrobat / InDesign defaults | Source Sans 3, Source Serif 4 |
+  | International / mixed-script docs | Noto Sans |
+  | X (Twitter) / Vercel docs | Manrope |
+  | Newspapers / blogs / Medium-style | Merriweather, Lora, PT Serif |
+  | Developer / technical PDFs | Roboto Mono, JetBrains Mono, Source Code Pro, Fira Code |
+
+  When a PDF asks for `Inter-SemiBold`, `Roboto-Bold`, `OpenSans-Italic`
+  etc., the SystemFontIndex resolves it to the matching bundled file
+  even on a fresh Linux server with no other fonts installed.
 - Typographic adaptation: if the original used U+2010 hyphen / NBSP / smart
   quotes, ASCII variants in the new text are mapped to the same characters
   the original used, so subset fonts don't render a hyphen as a `.notdef`
@@ -271,9 +292,9 @@ not back them up.** They contain user PII; auto-delete is a feature.
 - [ ] Daily backup of just the auth/user table to S3 (free tier).
 - [ ] Capture user feedback in-app — a tiny `?` button that opens a Tally
       form. Don't build your own form system.
-- [ ] Drop bundled fonts: ship Inter, Roboto, Open Sans, Lato in `fonts/`
-      so the most common Stripe/Google-Forms PDFs match their identified
-      font without extra setup. ~6 MB at runtime, well worth it.
+- [x] **Common PDF fonts bundled** (15 families, ~2.9 MB) — Stripe, Google
+      Workspace, Adobe, Atlassian, Notion etc. all resolve out of the
+      box on dev machine and deployed server.
 
 ### Stage 2 — ~100 active users / day
 

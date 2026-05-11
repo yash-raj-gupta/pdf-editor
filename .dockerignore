@@ -1,0 +1,31 @@
+# Build artefacts
+__pycache__/
+*.py[oc]
+.venv
+build/
+dist/
+wheels/
+*.egg-info
+
+# Local-only
+.git/
+.gitignore
+.DS_Store
+.vscode/
+.idea/
+
+# Demo + test outputs (regenerated)
+sample*.pdf
+sample*.png
+embedded_*.png
+repro_*
+perchar_*
+style_*
+realistic_*
+full_*
+test_*.py
+
+# Don't leak local secrets
+.env
+.env.local
+*.key

@@ -26,8 +26,9 @@ _LINUX_FONT_DIRS = (
 
 # Project-local fonts dir — drop TTFs here to make them available as
 # fallback faces (e.g. Inter for Stripe PDFs). Takes precedence over system
-# fonts because it sits at the front of the scan order.
-_PROJECT_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+# fonts because it sits at the front of the scan order. `__file__` is
+# `<root>/pdf_editor/fonts.py` so the project root is two parents up.
+_PROJECT_FONTS_DIR = Path(__file__).resolve().parent.parent / "fonts"
 
 
 def _all_system_font_dirs() -> list[Path]:
@@ -52,12 +53,17 @@ def _all_system_font_dirs() -> list[Path]:
 
 
 def _normalize_psname(name: str) -> str:
-    """Collapse names like 'Inter SemiBold', 'Inter-SemiBold', 'XYZ123+Inter-SemiBold'
-    into a single comparison key. Subset prefixes are stripped."""
+    """Collapse names like 'Inter SemiBold', 'Inter-SemiBold', 'XYZ123+Inter-SemiBold',
+    or 'Inter SemiBold Regular' (Adobe convention for "weight + style") into a
+    single comparison key. Subset prefixes and trailing 'regular' are stripped."""
     if not name:
         return ""
     n = name.split("+", 1)[1] if "+" in name else name
-    return n.lower().replace(" ", "").replace("-", "").replace("_", "")
+    n = n.lower().replace(" ", "").replace("-", "").replace("_", "")
+    # 'intersemiboldregular' -> 'intersemibold'; 'interregular' -> 'inter'.
+    if n.endswith("regular") and len(n) > len("regular"):
+        n = n[: -len("regular")]
+    return n
 
 
 class _SystemFontIndex:

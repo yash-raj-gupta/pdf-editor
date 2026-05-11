@@ -1,0 +1,50 @@
+# Render.com Blueprint — deploys PDFsmith from this repo's Dockerfile.
+#
+# How to use:
+#   1. Push this repo to GitHub (private is fine).
+#   2. Sign up at https://render.com (no card required for free tier).
+#   3. Dashboard -> New -> Blueprint -> pick this repo -> Apply.
+#   4. After build finishes (~3 min), reveal the generated password in
+#      Dashboard -> pdfsmith -> Environment -> PDF_EDITOR_PASSWORD.
+#
+# Free-tier notes:
+#   - The web service spins down after 15 min idle and cold-starts in
+#     ~30 s. Tolerable for a small pilot; bump to the "Starter" plan
+#     ($7/mo) later for always-on.
+#   - No persistent disk on free. Sessions live in /tmp inside the
+#     running container — fine because their TTL is 1h anyway and the
+#     sweeper auto-cleans them. If the container spins down, in-flight
+#     sessions are lost (user just re-uploads).
+#   - 750 free hours/month — covers a full month of always-on, more
+#     than enough with auto-spin-down.
+
+services:
+  - type: web
+    name: pdfsmith
+    runtime: docker
+    plan: free
+    region: singapore            # closest free Render region to India
+    healthCheckPath: /healthz
+    autoDeploy: true             # redeploy on every push to the default branch
+
+    envVars:
+      # Generated once by Render. Reveal under Dashboard -> Environment.
+      - key: PDF_EDITOR_PASSWORD
+        generateValue: true
+      - key: PDF_EDITOR_SECRET_KEY
+        generateValue: true
+
+      # Tells the auth middleware to set the Secure flag on cookies
+      # (Render terminates TLS automatically, so all traffic is HTTPS).
+      - key: PDF_EDITOR_SECURE_COOKIE
+        value: "1"
+
+      # Override the Dockerfile's /data/sessions default — Render's free
+      # tier has no persistent disk so we use the container's /tmp.
+      - key: PDF_SESSIONS_DIR
+        value: "/tmp/pdf-editor-sessions"
+
+      # Render normally injects PORT. Leaving it unset lets Render
+      # decide (default 10000); the gunicorn CMD in Dockerfile uses
+      # whatever PORT is set to. Add an explicit key here only if you
+      # need a specific port.

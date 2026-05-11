@@ -16,6 +16,7 @@ deploy, the in-memory cap is good enough.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 import threading
@@ -28,10 +29,14 @@ from flask import abort
 log = logging.getLogger(__name__)
 
 
-# Default location is OS temp; override SESSIONS_DIR before using if you
-# need a persistent volume (e.g. mounted to /data/sessions on Fly.io).
-SESSIONS_DIR: Path = Path(tempfile.gettempdir()) / "pdf-editor-sessions"
-SESSIONS_DIR.mkdir(exist_ok=True)
+# Where session dirs live. Defaults to OS temp; on Fly.io / a real server
+# point this at a mounted persistent volume so sessions survive worker
+# restarts within their TTL window.
+SESSIONS_DIR: Path = Path(
+    os.environ.get("PDF_SESSIONS_DIR")
+    or (Path(tempfile.gettempdir()) / "pdf-editor-sessions")
+)
+SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---- per-IP tracking -------------------------------------------------------

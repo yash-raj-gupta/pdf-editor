@@ -49,8 +49,31 @@ def _rid() -> str:
 
 # ---- configuration ---------------------------------------------------------
 
-SECRET_KEY = (os.environ.get("PDF_EDITOR_SECRET_KEY")
-              or "dev-only-key-change-me-in-prod-CHANGE-THIS")
+# A real prod deploy MUST set both of these. The dev fallback exists only so
+# `python server.py` works locally without env wrangling. We refuse to start
+# in prod if the secret is left at the default — anyone could mint cookies.
+_DEV_SECRET = "dev-only-key-change-me-in-prod-CHANGE-THIS"
+SECRET_KEY = os.environ.get("PDF_EDITOR_SECRET_KEY") or _DEV_SECRET
+
+# Anything that suggests "we are running in prod" trips the safety check.
+_LOOKS_LIKE_PROD = bool(
+    os.environ.get("PDF_EDITOR_SECURE_COOKIE")
+    or os.environ.get("FLY_APP_NAME")           # set by Fly.io
+    or os.environ.get("RAILWAY_ENVIRONMENT")    # Railway
+    or os.environ.get("RENDER")                 # Render
+    or os.environ.get("DYNO")                   # Heroku-style
+)
+if _LOOKS_LIKE_PROD and SECRET_KEY == _DEV_SECRET:
+    raise SystemExit(
+        "FATAL: PDF_EDITOR_SECRET_KEY must be set in production. "
+        "Generate with: openssl rand -hex 32"
+    )
+if _LOOKS_LIKE_PROD and not os.environ.get("PDF_EDITOR_PASSWORD"):
+    raise SystemExit(
+        "FATAL: PDF_EDITOR_PASSWORD must be set in production "
+        "(running auth-less in production would expose every uploaded PDF)."
+    )
+
 SESSION_TTL = int(os.environ.get("PDF_SESSION_TTL_SECONDS") or 3600)
 MAX_SESSIONS_PER_IP = int(os.environ.get("PDF_MAX_SESSIONS_PER_IP") or 5)
 MAX_PAGES_PER_PDF = int(os.environ.get("PDF_MAX_PAGES") or 500)
