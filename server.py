@@ -191,7 +191,18 @@ def healthz():
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    """Landing page for visitors, editor for signed-in users.
+
+    `/` is in auth.PUBLIC_PATHS so the route handler runs for unauthed
+    visitors — they see the marketing landing, with a Sign-in CTA that
+    takes them to /login. Anyone already signed in goes straight to the
+    editor. In DEV_NOAUTH mode (no password configured), the editor is
+    always shown.
+    """
+    from flask import session
+    if auth.DEV_NOAUTH or session.get("authed"):
+        return render_template("index.html")
+    return render_template("landing.html")
 
 
 @app.post("/upload")

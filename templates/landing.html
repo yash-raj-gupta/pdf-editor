@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>PDFsmith — edit PDFs without breaking their fonts</title>
+<meta name="description" content="Replace text, add new content, drop a signature into any PDF — and every font, size, color, and image stays exactly as the original. Built for the receipts, invoices, and contracts you actually deal with.">
+<meta name="theme-color" content="#ffffff">
+
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<link rel="canonical" href="{{ request.url_root.rstrip('/') }}/">
+
+<meta property="og:type"        content="website">
+<meta property="og:site_name"   content="PDFsmith">
+<meta property="og:title"       content="PDFsmith — edit PDFs without breaking their fonts">
+<meta property="og:description" content="Edit text in any PDF while keeping its original font, size, color and layout.">
+<meta property="og:image"       content="{{ request.url_root.rstrip('/') }}{{ url_for('static', filename='icon-512.png') }}">
+<meta property="og:url"         content="{{ request.url_root.rstrip('/') }}/">
+<meta name="twitter:card"        content="summary">
+<meta name="twitter:title"       content="PDFsmith — edit PDFs without breaking their fonts">
+<meta name="twitter:description" content="Edit text in any PDF while keeping its original font, size, color and layout.">
+<meta name="twitter:image"       content="{{ request.url_root.rstrip('/') }}{{ url_for('static', filename='icon-512.png') }}">
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI",
+                 system-ui, sans-serif;
+    color: #1d1d1f;
+    background: #fafafa;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* ---- top nav ---- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(250, 250, 250, 0.85);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid #ececef;
+  }
+  nav .inner {
+    max-width: 1080px; margin: 0 auto;
+    padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .brand {
+    display: inline-flex; align-items: center; gap: 9px;
+  }
+  .brand-logo {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: linear-gradient(135deg, #007aff 0%, #4d9dff 100%);
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,122,255,0.30);
+  }
+  .brand-name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  nav .spacer { flex: 1; }
+  nav .signin {
+    padding: 8px 16px; font-size: 14px; font-weight: 600;
+    background: #1d1d1f; color: white; border-radius: 8px;
+    transition: transform 0.06s, background 0.15s;
+  }
+  nav .signin:hover { background: #000; }
+  nav .signin:active { transform: scale(0.97); }
+
+  /* ---- hero ---- */
+  .hero {
+    max-width: 880px; margin: 0 auto;
+    padding: 96px 24px 80px;
+    text-align: center;
+  }
+  .hero h1 {
+    font-size: clamp(36px, 6vw, 60px);
+    line-height: 1.05; letter-spacing: -0.025em;
+    font-weight: 700;
+    margin-bottom: 20px;
+  }
+  .hero h1 .accent {
+    background: linear-gradient(135deg, #007aff 0%, #5b9eff 60%, #4d9dff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .hero p {
+    font-size: clamp(16px, 2vw, 19px);
+    color: #555;
+    max-width: 620px; margin: 0 auto 32px;
+  }
+  .cta-row {
+    display: inline-flex; gap: 12px; align-items: center;
+    flex-wrap: wrap; justify-content: center;
+  }
+  .cta {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 22px; border-radius: 10px;
+    font-size: 15px; font-weight: 600;
+    transition: transform 0.06s, background 0.15s, box-shadow 0.15s;
+  }
+  .cta.primary {
+    background: #1d1d1f; color: white;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px -8px rgba(0,0,0,0.20);
+  }
+  .cta.primary:hover { background: #000; }
+  .cta.primary:active { transform: translateY(1px); }
+  .cta.subtle { color: #555; }
+  .cta.subtle:hover { color: #1d1d1f; }
+
+  /* ---- demo strip: before/after visual ---- */
+  .demo {
+    max-width: 1080px; margin: 0 auto 96px;
+    padding: 0 24px;
+  }
+  .demo-card {
+    background: white;
+    border: 1px solid #ececef;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 12px 40px -12px rgba(0,0,0,0.08);
+  }
+  .demo-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border-top: 1px solid #ececef;
+  }
+  .demo-col { padding: 28px 32px 32px; }
+  .demo-col + .demo-col { border-left: 1px solid #ececef; }
+  .demo-col .label {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    color: #98989d; margin-bottom: 16px;
+  }
+  .demo-col .doc {
+    font-family: "Inter", -apple-system, sans-serif;
+    color: #1d1d1f; line-height: 1.55;
+  }
+  .demo-col h4 {
+    font-size: 22px; font-weight: 700; margin-bottom: 14px;
+    letter-spacing: -0.02em;
+  }
+  .demo-col .row {
+    display: grid; grid-template-columns: 140px 1fr;
+    font-size: 14px; padding: 3px 0;
+  }
+  .demo-col .row b { font-weight: 600; }
+  .demo-col .row.changed {
+    background: #fff8e7;
+    border-radius: 4px;
+    padding: 3px 8px;
+    margin: 2px -8px;
+  }
+  .demo-col .row.changed b { color: #7a5800; }
+  .demo-header {
+    padding: 14px 32px;
+    background: #fafafa;
+    color: #555; font-size: 13px;
+    border-bottom: 1px solid #ececef;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .traffic { display: flex; gap: 6px; }
+  .traffic span {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #e0e0e0;
+  }
+  .traffic span:first-child { background: #ff5f57; }
+  .traffic span:nth-child(2) { background: #febc2e; }
+  .traffic span:nth-child(3) { background: #28c840; }
+
+  /* ---- features grid ---- */
+  .features {
+    max-width: 1080px; margin: 0 auto 96px;
+    padding: 0 24px;
+  }
+  .section-eyebrow {
+    text-align: center;
+    font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: #007aff; margin-bottom: 16px;
+  }
+  .section-heading {
+    text-align: center;
+    font-size: clamp(28px, 4vw, 36px); font-weight: 700;
+    letter-spacing: -0.02em; line-height: 1.15;
+    max-width: 640px; margin: 0 auto 56px;
+  }
+  .feature-grid {
+    display: grid; gap: 24px;
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .feature {
+    background: white;
+    border: 1px solid #ececef;
+    border-radius: 14px;
+    padding: 28px;
+  }
+  .feature .icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: #f0f7ff; color: #007aff;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 18px;
+  }
+  .feature h3 {
+    font-size: 17px; font-weight: 600;
+    margin-bottom: 8px; letter-spacing: -0.01em;
+  }
+  .feature p { font-size: 14px; color: #555; line-height: 1.6; }
+  .feature .detail {
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid #f0f0f3;
+    font-size: 13px; color: #86868b;
+  }
+
+  /* ---- how-it-works ---- */
+  .steps {
+    max-width: 880px; margin: 0 auto 96px;
+    padding: 0 24px;
+  }
+  .step-list { display: grid; gap: 12px; }
+  .step {
+    display: grid; grid-template-columns: 36px 1fr;
+    gap: 18px; align-items: start;
+    padding: 20px 24px;
+    background: white;
+    border: 1px solid #ececef;
+    border-radius: 12px;
+  }
+  .step-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: #1d1d1f; color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+  }
+  .step h4 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .step p  { font-size: 14px; color: #555; }
+
+  /* ---- final CTA ---- */
+  .final-cta {
+    max-width: 720px; margin: 0 auto 96px;
+    padding: 56px 24px;
+    text-align: center;
+    background: linear-gradient(135deg, #1d1d1f 0%, #2c2c2e 100%);
+    border-radius: 20px;
+    color: white;
+    margin-left: 24px; margin-right: 24px;
+  }
+  @media (min-width: 768px) {
+    .final-cta { margin-left: auto; margin-right: auto; }
+  }
+  .final-cta h2 {
+    font-size: clamp(24px, 4vw, 32px); font-weight: 700;
+    letter-spacing: -0.02em; margin-bottom: 12px;
+  }
+  .final-cta p {
+    color: rgba(255,255,255,0.7);
+    max-width: 480px; margin: 0 auto 28px; font-size: 15px;
+  }
+  .final-cta .cta.primary {
+    background: white; color: #1d1d1f;
+  }
+  .final-cta .cta.primary:hover { background: #f5f5f7; }
+
+  /* ---- footer ---- */
+  footer {
+    max-width: 1080px; margin: 0 auto;
+    padding: 32px 24px 56px;
+    border-top: 1px solid #ececef;
+    font-size: 13px; color: #86868b;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 16px;
+  }
+  footer .left { display: flex; align-items: center; gap: 10px; }
+  footer a:hover { color: #1d1d1f; }
+
+  /* ---- mobile ---- */
+  @media (max-width: 760px) {
+    .hero { padding: 56px 24px 48px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .demo-grid { grid-template-columns: 1fr; }
+    .demo-col + .demo-col { border-left: none; border-top: 1px solid #ececef; }
+  }
+
+  /* ---- dark-mode for landing (system preference only — no manual
+       toggle on this page since there's nothing to toggle yet) ---- */
+  @media (prefers-color-scheme: dark) {
+    body { background: #0a0a0b; color: #f2f2f7; }
+    nav { background: rgba(10,10,11,0.85); border-bottom-color: #2c2c2e; }
+    nav .signin { background: #f2f2f7; color: #0a0a0b; }
+    nav .signin:hover { background: white; }
+    .hero p, .feature p, .step p, footer { color: #98989d; }
+    .feature, .step, .demo-card { background: #1c1c1e; border-color: #2c2c2e; }
+    .feature .icon { background: rgba(10,132,255,0.15); }
+    .demo-header { background: #1c1c1e; border-bottom-color: #2c2c2e; color: #98989d; }
+    .demo-grid, .demo-col + .demo-col { border-color: #2c2c2e; }
+    .demo-col .row.changed { background: rgba(255,159,10,0.15); }
+    .demo-col .row.changed b { color: #ffd66b; }
+    .feature .detail { border-top-color: #2c2c2e; color: #98989d; }
+    footer { border-top-color: #2c2c2e; }
+    .cta.primary { background: #f2f2f7; color: #0a0a0b; }
+    .cta.primary:hover { background: white; }
+    .final-cta { background: linear-gradient(135deg, #1c1c1e 0%, #2c2c2e 100%); }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="inner">
+    <a class="brand" href="/">
+      <span class="brand-logo">
+        <svg viewBox="0 0 24 24" width="20" height="20"
+             fill="none" stroke="white" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <path d="m11.5 14.5 1.5 1.5 3-3"/>
+        </svg>
+      </span>
+      <span class="brand-name">PDFsmith</span>
+    </a>
+    <div class="spacer"></div>
+    <a class="signin" href="{{ url_for('login') }}">Sign in</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <h1>The PDF editor<br>that <span class="accent">doesn't break your fonts</span>.</h1>
+  <p>
+    Replace text, drop a signature, add a note to a Stripe receipt —
+    every font, size, color, and image stays exactly as the original.
+    Other tools turn your whole document into Helvetica. This one doesn't.
+  </p>
+  <div class="cta-row">
+    <a class="cta primary" href="{{ url_for('login') }}">
+      Sign in to edit a PDF
+      <svg viewBox="0 0 24 24" width="16" height="16"
+           fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round">
+        <line x1="5" y1="12" x2="19" y2="12"/>
+        <polyline points="12 5 19 12 12 19"/>
+      </svg>
+    </a>
+    <a class="cta subtle" href="#how">See how it works</a>
+  </div>
+</section>
+
+<!-- Before / after visual. Real fragments from a receipt with the
+     changed lines highlighted in amber, the rest untouched. -->
+<section class="demo">
+  <div class="demo-card">
+    <div class="demo-header">
+      <div class="traffic"><span></span><span></span><span></span></div>
+      <span>Stripe receipt · edited in PDFsmith</span>
+    </div>
+    <div class="demo-grid">
+      <div class="demo-col">
+        <div class="label">Before</div>
+        <div class="doc">
+          <h4>Receipt</h4>
+          <div class="row"><b>Invoice number</b><span>7B0B003B-0017</span></div>
+          <div class="row"><b>Receipt number</b><span>2047-3222-8449</span></div>
+          <div class="row"><b>Date paid</b><span>April 2, 2026</span></div>
+        </div>
+      </div>
+      <div class="demo-col">
+        <div class="label">After (edited)</div>
+        <div class="doc">
+          <h4>Receipt</h4>
+          <div class="row changed"><b>Invoice number</b><span>7B0B003B-0099</span></div>
+          <div class="row changed"><b>Receipt number</b><span>2883-1034-0238</span></div>
+          <div class="row changed"><b>Date paid</b><span>May 1, 2026</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <div class="section-eyebrow">What's different</div>
+  <h2 class="section-heading">Built for the PDFs you actually deal with — not idealised ones.</h2>
+
+  <div class="feature-grid">
+    <div class="feature">
+      <div class="icon">
+        <svg viewBox="0 0 24 24" width="20" height="20"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 7 4 4 20 4 20 7"/>
+          <line x1="9" y1="20" x2="15" y2="20"/>
+          <line x1="12" y1="4" x2="12" y2="20"/>
+        </svg>
+      </div>
+      <h3>Per-character font preservation</h3>
+      <p>
+        PDFs ship with <em>subsetted</em> fonts — only the glyphs they
+        actually drew. When your edit needs a character that wasn't in
+        the subset, only that one character falls back. The rest stays
+        in the original face.
+      </p>
+      <div class="detail">
+        Bundled: Inter, Roboto, Open Sans, Source Sans, Lato, Merriweather,
+        Lora, JetBrains Mono and 7 others. Stripe, Google Workspace,
+        Notion, and Adobe PDFs all look right out of the box.
+      </div>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg viewBox="0 0 24 24" width="20" height="20"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 9 4-4 4 4"/>
+          <path d="M9 5v14"/>
+          <path d="m19 15-4 4-4-4"/>
+          <path d="M15 19V5"/>
+        </svg>
+      </div>
+      <h3>Click, type, drag</h3>
+      <p>
+        Click any text on the rendered page to edit it inline. The
+        <em>Add text</em> tool drops new content anywhere. <em>Insert
+        image</em> takes a signature or logo file. Everything you add is
+        draggable; everything you do is undoable with Cmd-Z.
+      </p>
+      <div class="detail">
+        Live preview re-renders as you type. Compare-original toggle
+        flips between your edits and the source so you can verify
+        before downloading.
+      </div>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg viewBox="0 0 24 24" width="20" height="20"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+      <h3>Private by default</h3>
+      <p>
+        Uploads auto-delete within an hour. Nothing is shared, nothing
+        is trained on, no third-party storage. The session you start
+        is the only copy.
+      </p>
+      <div class="detail">
+        Per-IP session caps and rate limits prevent abuse without
+        getting in your way. Edits live in your browser until you
+        save and download.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="steps" id="how">
+  <div class="section-eyebrow">How it works</div>
+  <h2 class="section-heading">Three steps. About sixty seconds.</h2>
+
+  <div class="step-list">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <h4>Drop a PDF</h4>
+        <p>Receipt, invoice, contract, scanned form — any PDF up to 32 MB. PDFsmith reads every text span with its actual font, size, color, and position.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <h4>Edit, add, sign</h4>
+        <p>Click a piece of text to change it. Add new lines anywhere. Drop in a signature image. Drag anything to reposition. The live preview shows exactly what the downloaded file will look like.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <h4>Save &amp; download</h4>
+        <p>You get back a real PDF — not a re-render. Forms, metadata, and untouched pages stay intact. The session deletes itself after an hour.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="final-cta">
+  <h2>Stop fighting Helvetica.</h2>
+  <p>Sign in and edit your first PDF. The first edit takes less than a minute and you'll feel why we built this.</p>
+  <a class="cta primary" href="{{ url_for('login') }}">
+    Sign in
+    <svg viewBox="0 0 24 24" width="16" height="16"
+         fill="none" stroke="currentColor" stroke-width="2.5"
+         stroke-linecap="round" stroke-linejoin="round">
+      <line x1="5" y1="12" x2="19" y2="12"/>
+      <polyline points="12 5 19 12 12 19"/>
+    </svg>
+  </a>
+</section>
+
+<footer>
+  <div class="left">
+    <span class="brand-logo" style="width:22px;height:22px;border-radius:6px;">
+      <svg viewBox="0 0 24 24" width="14" height="14"
+           fill="none" stroke="white" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <path d="m11.5 14.5 1.5 1.5 3-3"/>
+      </svg>
+    </span>
+    <span>PDFsmith</span>
+  </div>
+  <div>Bundled fonts are <a href="https://scripts.sil.org/OFL" rel="noopener" target="_blank">SIL OFL</a> licensed.</div>
+</footer>
+
+</body>
+</html>
