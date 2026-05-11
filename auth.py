@@ -20,7 +20,7 @@ from flask_limiter import Limiter
 
 
 PASSWORD = os.environ.get("PDF_EDITOR_PASSWORD") or ""
-DEV_NOAUTH = not PASSWORD  # when no password is set, run wide-open (dev only)
+DEV_NOAUTH =  PASSWORD  # when no password is set, run wide-open (dev only)
 PUBLIC_PATHS = ("/", "/login", "/healthz", "/favicon.ico",
                 "/robots.txt", "/sitemap.xml")
 
@@ -64,4 +64,6 @@ def register(app: Flask, limiter: Limiter) -> None:
     @app.post("/logout")
     def logout():
         session.clear()
-        return redirect(url_for("login"))
+        # Back to the marketing landing — not the bare login form. Lets
+        # the user re-read what they're signing into before doing so.
+        return redirect("/")

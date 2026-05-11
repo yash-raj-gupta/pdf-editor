@@ -151,6 +151,7 @@ def robots_txt():
     page is public; everything else is noise to a search engine."""
     body = (
         "User-agent: *\n"
+        "Allow: /$\n"
         "Allow: /login\n"
         "Allow: /static/\n"
         "Disallow: /upload\n"
@@ -169,15 +170,18 @@ def robots_txt():
 
 @app.get("/sitemap.xml")
 def sitemap_xml():
-    """Minimal sitemap — the app is auth-gated, so only /login is public.
-    Including it explicitly lets search engines treat /login as the
-    canonical entry point rather than guessing."""
+    """The public URLs that search engines should index. `/` is the
+    marketing landing — that's the canonical entry point. `/login` is
+    listed too with a lower priority since it's a useful destination
+    but the landing is the better SERP target."""
     base = request.url_root.rstrip("/")
     body = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f'  <url><loc>{base}/</loc>'
+        f'<changefreq>weekly</changefreq><priority>1.0</priority></url>\n'
         f'  <url><loc>{base}/login</loc>'
-        f'<changefreq>monthly</changefreq><priority>1.0</priority></url>\n'
+        f'<changefreq>monthly</changefreq><priority>0.5</priority></url>\n'
         '</urlset>\n'
     )
     return Response(body, mimetype="application/xml")

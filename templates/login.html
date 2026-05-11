@@ -3,62 +3,289 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>PDFsmith — edit PDFs without breaking their fonts</title>
-<meta name="description" content="Edit text in any PDF while keeping the original font, size, color and layout intact. Handles Stripe-style receipts, invoices, and contracts. Drag-to-move add text, replace images, OCR scanned pages.">
-<meta name="theme-color" content="#007aff">
+<title>Sign in — PDFsmith</title>
+<meta name="description" content="Sign in to PDFsmith. Edit PDFs in place while every font, size, color and image stays exactly as the original.">
+<meta name="theme-color" content="#0a0a0b">
+<meta name="robots" content="noindex">
 
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-<link rel="canonical" href="{{ request.url_root.rstrip('/') }}/login">
 
-<!-- Open Graph / Twitter — how the link previews on WhatsApp, Twitter, Slack -->
-<meta property="og:type"        content="website">
-<meta property="og:site_name"   content="PDFsmith">
-<meta property="og:title"       content="PDFsmith — edit PDFs without breaking their fonts">
-<meta property="og:description" content="Edit text in any PDF while keeping its original font, size, color and layout. Handles Stripe-style receipts, invoices, contracts.">
-<meta property="og:image"       content="{{ request.url_root.rstrip('/') }}{{ url_for('static', filename='icon-512.png') }}">
-<meta property="og:url"         content="{{ request.url_root.rstrip('/') }}/login">
-<meta name="twitter:card"        content="summary">
-<meta name="twitter:title"       content="PDFsmith — edit PDFs without breaking their fonts">
-<meta name="twitter:description" content="Edit text in any PDF while keeping its original font, size, color and layout.">
-<meta name="twitter:image"       content="{{ request.url_root.rstrip('/') }}{{ url_for('static', filename='icon-512.png') }}">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI",
+                 system-ui, sans-serif;
     color: #1d1d1f;
-    background:
-      radial-gradient(circle at 20% -10%, rgba(0,122,255,0.10), transparent 45%),
-      radial-gradient(circle at 90% 110%, rgba(255,159,10,0.10), transparent 45%),
-      #f5f5f7;
-    min-height: 100vh; padding: 24px;
-    display: flex; align-items: center; justify-content: center;
     -webkit-font-smoothing: antialiased;
   }
-  .card {
-    background: white; padding: 40px 44px 32px; border-radius: 16px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04),
-                0 12px 40px -8px rgba(0,0,0,0.10);
-    width: 100%; max-width: 400px;
-    animation: rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  a { color: inherit; text-decoration: none; }
+
+  /* ---- two-pane shell ---- */
+  .shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
-  @keyframes rise {
+
+  /* ---- LEFT: brand / demo ---- */
+  .pane-left {
+    position: relative;
+    background:
+      radial-gradient(circle at 25% 18%, rgba(0,122,255,0.20), transparent 50%),
+      radial-gradient(circle at 80% 92%, rgba(110, 84, 255, 0.18), transparent 55%),
+      #0a0a0b;
+    color: #f2f2f7;
+    padding: 40px 56px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Decorative dots — subtle texture, no actual content */
+  .pane-left::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+    pointer-events: none;
+  }
+
+  .left-brand {
+    display: inline-flex; align-items: center; gap: 10px;
+    position: relative; z-index: 1;
+  }
+  .left-brand-logo {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(135deg, #007aff 0%, #4d9dff 100%);
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 12px rgba(0,122,255,0.40);
+  }
+  .left-brand-name {
+    font-size: 18px; font-weight: 700; letter-spacing: -0.01em;
+  }
+
+  .left-content {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+    max-width: 480px; position: relative; z-index: 1;
+  }
+
+  .left-eyebrow {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+    color: #5b9eff;
+    margin-bottom: 18px;
+  }
+  .left-title {
+    font-size: clamp(24px, 3vw, 32px);
+    font-weight: 700; line-height: 1.18;
+    letter-spacing: -0.02em;
+    margin-bottom: 16px;
+  }
+  .left-sub {
+    color: rgba(255,255,255,0.65);
+    line-height: 1.55; font-size: 15px;
+    margin-bottom: 36px;
+  }
+
+  /* ---- the animated demo card ---- */
+  .demo {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 18px 22px 22px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.10), 0 24px 60px -24px rgba(0,0,0,0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .demo-header {
+    display: flex; align-items: center; gap: 8px;
+    padding-bottom: 14px; margin-bottom: 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.55); font-size: 12px;
+  }
+  .demo-header .dots { display: flex; gap: 6px; }
+  .demo-header .dots span {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: rgba(255,255,255,0.18);
+  }
+  .demo-header .dots span:first-child { background: #ff5f57; }
+  .demo-header .dots span:nth-child(2) { background: #febc2e; }
+  .demo-header .dots span:nth-child(3) { background: #28c840; }
+
+  .demo-row {
+    display: grid; grid-template-columns: 130px 1fr;
+    font-size: 14px; padding: 5px 8px;
+    margin: 0 -8px; border-radius: 6px;
+    color: rgba(255,255,255,0.92);
+    align-items: center;
+  }
+  .demo-row b { font-weight: 600; color: rgba(255,255,255,0.55); }
+
+  /* ──────────────────────────────────────────────────────────────────
+     Edit-simulation animation (7-second loop), same as landing demo
+     but in dark-pane colors. Phases:
+       0.0–2.1s | original shown
+       2.1–2.4s | focus ring + amber row pulse fade in
+       2.4–2.8s | blue selection rect over original
+       2.8–3.1s | original + selection fade out (delete)
+       3.1–4.1s | edited text "types in" L→R via clip-path, cursor at end
+       4.1–5.9s | edited text held, cursor pulses
+       5.9–6.2s | edited text wipes back R→L (delete)
+       6.2–6.4s | focus ring fades, original fades back in
+       6.4–7.0s | idle, loop
+     ────────────────────────────────────────────────────────────────── */
+
+  .demo-value {
+    position: relative; display: inline-block;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 7px; margin: -2px -7px;
+    border-radius: 5px;
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  .demo-value .before,
+  .demo-value .after {
+    display: inline-block; position: relative;
+    white-space: nowrap;
+  }
+  .demo-value .after {
+    position: absolute; left: 7px; top: 2px;       /* matches the padding */
+    color: #ffd66b;
+    clip-path: inset(0 100% 0 0);
+  }
+  /* Blue text-selection rect over the original — appears just before delete */
+  .demo-value .before::before {
+    content: ""; position: absolute; inset: -1px -2px;
+    background: rgba(91,158,255,0.40);
+    border-radius: 3px;
+    opacity: 0;
+    z-index: -1;
+  }
+  /* Inline caret riding the end of .after — revealed with the text */
+  .demo-value .caret {
+    display: inline-block;
+    width: 1.5px; height: 1em;
+    background: #5b9eff;
+    border-radius: 1px;
+    vertical-align: -2px; margin-left: 2px;
+    transform: translateY(1px);
+  }
+
+  /* ---- keyframes ---- */
+  @keyframes pdfsmith-field {
+    0%, 28%      { box-shadow: 0 0 0 0 transparent; background: transparent; }
+    32%, 82%     { box-shadow: 0 0 0 2px rgba(91,158,255,0.45);
+                   background: rgba(91,158,255,0.10); }
+    86%, 100%    { box-shadow: 0 0 0 0 transparent; background: transparent; }
+  }
+  @keyframes pdfsmith-before {
+    0%, 30%      { opacity: 1; }
+    34%, 40%     { opacity: 1; }
+    44%          { opacity: 0; }
+    88%          { opacity: 0; }
+    92%, 100%    { opacity: 1; }
+  }
+  @keyframes pdfsmith-selection {
+    0%, 30%      { opacity: 0; }
+    34%, 40%     { opacity: 1; }
+    44%, 100%    { opacity: 0; }
+  }
+  @keyframes pdfsmith-after {
+    0%, 44%      { clip-path: inset(0 100% 0 0); }
+    58%, 84%     { clip-path: inset(0 0 0 0); }
+    88%, 100%    { clip-path: inset(0 100% 0 0); }
+  }
+  @keyframes pdfsmith-row-pulse {
+    0%, 30%, 86%, 100% { background: transparent; }
+    34%, 82%           { background: rgba(255,159,10,0.18); }
+  }
+  @keyframes pdfsmith-caret-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.25; }
+  }
+
+  .demo-row.editable {
+    animation: pdfsmith-row-pulse 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value {
+    animation: pdfsmith-field 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value .before {
+    animation: pdfsmith-before 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value .before::before {
+    animation: pdfsmith-selection 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value .after {
+    animation: pdfsmith-after 7s cubic-bezier(0.55, 0.05, 0.25, 1) infinite;
+  }
+  .demo-row.editable .demo-value .caret {
+    animation: pdfsmith-caret-pulse 1.1s ease-in-out infinite;
+  }
+
+  /* Stagger 3 rows so they edit one-after-another, not all at once */
+  .demo-row.editable                              { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value                  { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value .before          { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value .before::before  { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value .after           { animation-delay: var(--t, 0s); }
+  .demo-row.editable:nth-of-type(2) { --t: -2.3s; }
+  .demo-row.editable:nth-of-type(3) { --t: -4.6s; }
+
+  .left-bullets {
+    margin-top: 28px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .left-bullet {
+    display: grid; grid-template-columns: 18px 1fr; gap: 12px;
+    align-items: start;
+    color: rgba(255,255,255,0.78); font-size: 14px;
+    line-height: 1.45;
+  }
+  .left-bullet svg { color: #5b9eff; margin-top: 2px; flex-shrink: 0; }
+
+  /* Faint floating decorative shapes */
+  .float {
+    position: absolute; border-radius: 50%;
+    filter: blur(40px); opacity: 0.5; pointer-events: none;
+  }
+  .float-a { width: 220px; height: 220px; top: -60px; right: -60px;
+              background: rgba(0,122,255,0.40); animation: drift 12s ease-in-out infinite; }
+  .float-b { width: 180px; height: 180px; bottom: 40px; left: 20px;
+              background: rgba(110,84,255,0.30); animation: drift 16s ease-in-out infinite reverse; }
+  @keyframes drift {
+    0%, 100% { transform: translate(0, 0); }
+    50%      { transform: translate(20px, -20px); }
+  }
+
+  /* ---- RIGHT: form ---- */
+  .pane-right {
+    background: #fafafa;
+    padding: 40px 48px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .card {
+    background: white;
+    padding: 40px 44px 32px;
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04),
+                0 12px 40px -8px rgba(0,0,0,0.08);
+    width: 100%; max-width: 380px;
+    border: 1px solid #f0f0f3;
+    animation: card-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes card-rise {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: none; }
   }
-  .brand {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 28px;
-  }
-  .brand .logo {
-    width: 40px; height: 40px; border-radius: 11px;
-    background: linear-gradient(135deg, #007aff 0%, #4d9dff 100%);
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 2px 8px rgba(0,122,255,0.25);
-  }
-  .brand h1 {
+  .card h1 {
     font-size: 22px; font-weight: 700; letter-spacing: -0.01em;
+    margin-bottom: 6px;
   }
-  .brand .tagline { font-size: 12px; color: #86868b; margin-top: 1px; }
+  .card .lead {
+    color: #86868b; font-size: 14px; margin-bottom: 28px;
+  }
   label {
     font-size: 11px; color: #86868b; display: block; margin-bottom: 7px;
     text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600;
@@ -75,50 +302,174 @@
   }
   button[type=submit] {
     margin-top: 18px; width: 100%; padding: 12px;
-    background: #007aff; color: white; border: none;
+    background: #1d1d1f; color: white; border: none;
     border-radius: 10px; font-size: 15px; font-weight: 600;
     cursor: pointer; transition: background 0.1s, transform 0.05s;
   }
-  button[type=submit]:hover  { background: #0066d6; }
+  button[type=submit]:hover  { background: #000; }
   button[type=submit]:active { transform: scale(0.98); }
   .alert.error {
     background: #ffebee; color: #c62828; padding: 10px 14px;
     border-radius: 8px; font-size: 13px; margin-bottom: 16px;
     border: 1px solid rgba(198,40,40,0.15);
   }
-  .footer {
-    margin-top: 22px; padding-top: 18px; border-top: 1px solid #f0f0f3;
-    font-size: 11px; color: #98989d; text-align: center;
+  .back-link {
+    position: absolute; top: 28px; left: 32px;
+    font-size: 13px; color: #86868b;
+    display: inline-flex; align-items: center; gap: 6px;
   }
-</style></head>
+  .back-link:hover { color: #1d1d1f; }
+  .footer-note {
+    margin-top: 22px; padding-top: 18px; border-top: 1px solid #f0f0f3;
+    font-size: 11px; color: #98989d; text-align: center; line-height: 1.5;
+  }
+
+  /* ---- mobile: stack panes ---- */
+  @media (max-width: 880px) {
+    .shell { grid-template-columns: 1fr; }
+    .pane-left { padding: 32px 24px 40px; min-height: auto; }
+    .pane-left .float { display: none; }
+    .left-content { max-width: 100%; }
+    .left-title { font-size: 22px; }
+    .left-sub { margin-bottom: 24px; }
+    .left-bullets { display: none; }   /* save room on phones */
+    .pane-right { padding: 32px 20px 56px; }
+    .back-link { display: none; }
+  }
+  @media (max-width: 640px) {
+    .demo { display: none; }            /* keep the mobile entry simple */
+  }
+
+  /* Reduced motion: hold the original state, no drift, no edit cycle */
+  @media (prefers-reduced-motion: reduce) {
+    .demo-row.editable,
+    .demo-row.editable .demo-value,
+    .demo-row.editable .demo-value .before,
+    .demo-row.editable .demo-value .before::before,
+    .demo-row.editable .demo-value .after,
+    .demo-row.editable .demo-value .caret,
+    .float { animation: none !important; }
+    .demo-row.editable .demo-value .after { clip-path: inset(0 100% 0 0); }
+  }
+</style>
+</head>
 <body>
-  <form class="card" method="POST" action="{{ url_for('login_post') }}">
-    <div class="brand">
-      <div class="logo">
-        <!-- Document with edit mark — same icon used in editor header -->
-        <svg viewBox="0 0 24 24" width="22" height="22"
-             fill="none" stroke="white" stroke-width="2"
+  <div class="shell">
+
+    <!-- LEFT pane: brand, demo, value-prop -->
+    <aside class="pane-left">
+      <div class="float float-a"></div>
+      <div class="float float-b"></div>
+
+      <a class="left-brand" href="/">
+        <span class="left-brand-logo">
+          <svg viewBox="0 0 24 24" width="22" height="22"
+               fill="none" stroke="white" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <path d="m11.5 14.5 1.5 1.5 3-3"/>
+          </svg>
+        </span>
+        <span class="left-brand-name">PDFsmith</span>
+      </a>
+
+      <div class="left-content">
+        <div class="left-eyebrow">Edit. Keep the fonts.</div>
+        <h2 class="left-title">Watch a Stripe receipt get edited without losing its typeface.</h2>
+        <p class="left-sub">
+          PDFsmith reads the actual font subset embedded in your PDF.
+          When you change a number, the new digits render in the
+          same Inter SemiBold the original used — not a generic
+          Helvetica fallback.
+        </p>
+
+        <!-- Cycling before/after demo -->
+        <div class="demo" aria-label="Before and after demonstration">
+          <div class="demo-header">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <span>receipt.pdf · live preview</span>
+          </div>
+          <div class="demo-row editable">
+            <b>Invoice number</b>
+            <span class="demo-value">
+              <span class="before">7B0B003B-0017</span><span class="after">7B0B003B-0099<i class="caret"></i></span>
+            </span>
+          </div>
+          <div class="demo-row editable">
+            <b>Receipt number</b>
+            <span class="demo-value">
+              <span class="before">2047-3222-8449</span><span class="after">2883-1034-0238<i class="caret"></i></span>
+            </span>
+          </div>
+          <div class="demo-row editable">
+            <b>Date paid</b>
+            <span class="demo-value">
+              <span class="before">April 2, 2026</span><span class="after">May 1, 2026<i class="caret"></i></span>
+            </span>
+          </div>
+        </div>
+
+        <ul class="left-bullets">
+          <li class="left-bullet">
+            <svg viewBox="0 0 24 24" width="16" height="16"
+                 fill="none" stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>15 common PDF fonts bundled — Inter, Roboto, Open Sans, and more.</span>
+          </li>
+          <li class="left-bullet">
+            <svg viewBox="0 0 24 24" width="16" height="16"
+                 fill="none" stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Drag, undo, OCR, image inserts. Live preview as you type.</span>
+          </li>
+          <li class="left-bullet">
+            <svg viewBox="0 0 24 24" width="16" height="16"
+                 fill="none" stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Uploads auto-delete after one hour. Nothing is shared.</span>
+          </li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- RIGHT pane: the form -->
+    <section class="pane-right">
+      <a class="back-link" href="/">
+        <svg viewBox="0 0 24 24" width="14" height="14"
+             fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <path d="m11.5 14.5 1.5 1.5 3-3"/>
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
         </svg>
-      </div>
-      <div>
-        <h1>PDFsmith</h1>
-        <div class="tagline">Edit PDFs without breaking them</div>
-      </div>
-    </div>
+        Back to homepage
+      </a>
 
-    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+      <form class="card" method="POST" action="{{ url_for('login_post') }}">
+        <h1>Sign in</h1>
+        <p class="lead">Enter the shared password to continue.</p>
 
-    <label for="pw">Password</label>
-    <input type="password" name="password" id="pw"
-           autofocus autocomplete="current-password"
-           placeholder="Enter the shared password">
-    <input type="hidden" name="next" value="{{ next }}">
-    <button type="submit">Sign in</button>
+        {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
-    <div class="footer">Edits stay in your browser session — nothing leaves the server.</div>
-  </form>
+        <label for="pw">Password</label>
+        <input type="password" name="password" id="pw"
+               autofocus autocomplete="current-password"
+               placeholder="••••••••••••">
+        <input type="hidden" name="next" value="{{ next }}">
+        <button type="submit">Sign in</button>
+
+        <div class="footer-note">
+          Edits stay in your browser session.<br>
+          Nothing leaves the server.
+        </div>
+      </form>
+    </section>
+
+  </div>
 </body></html>

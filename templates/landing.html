@@ -121,40 +121,10 @@
     border-radius: 16px;
     overflow: hidden;
     box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 12px 40px -12px rgba(0,0,0,0.08);
+    max-width: 720px; margin: 0 auto;
   }
-  .demo-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    border-top: 1px solid #ececef;
-  }
-  .demo-col { padding: 28px 32px 32px; }
-  .demo-col + .demo-col { border-left: 1px solid #ececef; }
-  .demo-col .label {
-    font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.8px;
-    color: #98989d; margin-bottom: 16px;
-  }
-  .demo-col .doc {
-    font-family: "Inter", -apple-system, sans-serif;
-    color: #1d1d1f; line-height: 1.55;
-  }
-  .demo-col h4 {
-    font-size: 22px; font-weight: 700; margin-bottom: 14px;
-    letter-spacing: -0.02em;
-  }
-  .demo-col .row {
-    display: grid; grid-template-columns: 140px 1fr;
-    font-size: 14px; padding: 3px 0;
-  }
-  .demo-col .row b { font-weight: 600; }
-  .demo-col .row.changed {
-    background: #fff8e7;
-    border-radius: 4px;
-    padding: 3px 8px;
-    margin: 2px -8px;
-  }
-  .demo-col .row.changed b { color: #7a5800; }
   .demo-header {
-    padding: 14px 32px;
+    padding: 14px 24px;
     background: #fafafa;
     color: #555; font-size: 13px;
     border-bottom: 1px solid #ececef;
@@ -168,6 +138,155 @@
   .traffic span:first-child { background: #ff5f57; }
   .traffic span:nth-child(2) { background: #febc2e; }
   .traffic span:nth-child(3) { background: #28c840; }
+
+  .demo-body {
+    padding: 28px 36px 32px;
+    font-family: "Inter", -apple-system, sans-serif;
+    color: #1d1d1f; line-height: 1.55;
+  }
+  .demo-body h4 {
+    font-size: 22px; font-weight: 700; margin-bottom: 18px;
+    letter-spacing: -0.02em;
+  }
+  .demo-row {
+    display: grid; grid-template-columns: 160px 1fr;
+    font-size: 15px; padding: 5px 8px;
+    margin: 0 -8px; border-radius: 6px;
+    align-items: center;
+  }
+  .demo-row b { font-weight: 600; color: #1d1d1f; }
+
+  /* ──────────────────────────────────────────────────────────────────
+     Edit-simulation animation (7-second loop).
+       0.0–2.1s  | original shown, no chrome
+       2.1–2.4s  | focus ring fades in, row gets amber wash (the edit start)
+       2.4–2.8s  | blue text-selection rect appears over original
+       2.8–3.1s  | selection + original delete
+       3.1–4.1s  | new text "types in" via clip-path L→R, cursor at end
+       4.1–5.9s  | new text visible, cursor pulses gently
+       5.9–6.2s  | new text deletes R→L
+       6.2–6.4s  | focus ring fades, original fades back in
+       6.4–7.0s  | idle, then loop
+     Implementation uses two stacked spans (.before / .after) inside
+     .demo-value. Selection is a ::before pseudo on .before. The cursor
+     is the literal trailing <i class="caret"> inside .after so it
+     reveals along with the text.
+     ────────────────────────────────────────────────────────────────── */
+
+  .demo-value {
+    position: relative; display: inline-block;
+    font-variant-numeric: tabular-nums;
+    padding: 3px 7px; margin: -3px -7px;
+    border-radius: 5px;
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  .demo-value .before,
+  .demo-value .after {
+    display: inline-block; position: relative;
+    white-space: nowrap;
+  }
+  .demo-value .after {
+    position: absolute; left: 7px; top: 3px;       /* match padding */
+    color: inherit;
+    clip-path: inset(0 100% 0 0);                  /* hidden initially */
+  }
+
+  /* Blue text-selection overlay on the original — only visible briefly */
+  .demo-value .before::before {
+    content: ""; position: absolute; inset: -1px -2px;
+    background: rgba(0,122,255,0.30);
+    border-radius: 3px;
+    opacity: 0;
+    z-index: -1;
+  }
+
+  /* Cursor caret rendered inline at the end of .after's text so it
+     reveals naturally with the clip-path. Once revealed it pulses. */
+  .demo-value .caret {
+    display: inline-block;
+    width: 1.5px; height: 1em;
+    background: #007aff;
+    border-radius: 1px;
+    vertical-align: -2px; margin-left: 2px;
+    transform: translateY(1px);
+  }
+
+  /* ---- the keyframes ---- */
+  @keyframes pdfsmith-field {
+    0%, 28%      { box-shadow: 0 0 0 0 transparent; background: transparent; }
+    32%, 82%     { box-shadow: 0 0 0 2px rgba(0,122,255,0.32);
+                   background: rgba(0,122,255,0.06); }
+    86%, 100%    { box-shadow: 0 0 0 0 transparent; background: transparent; }
+  }
+  @keyframes pdfsmith-before {
+    0%, 30%      { opacity: 1; }
+    34%, 40%     { opacity: 1; }
+    44%          { opacity: 0; }
+    88%          { opacity: 0; }
+    92%, 100%    { opacity: 1; }
+  }
+  @keyframes pdfsmith-selection {
+    0%, 30%      { opacity: 0; }
+    34%, 40%     { opacity: 1; }
+    44%, 100%    { opacity: 0; }
+  }
+  @keyframes pdfsmith-after {
+    0%, 44%      { clip-path: inset(0 100% 0 0); }
+    58%, 84%     { clip-path: inset(0 0 0 0); }
+    88%, 100%    { clip-path: inset(0 100% 0 0); }
+  }
+  /* Row-level amber background pulse, in sync with the field focus */
+  @keyframes pdfsmith-row-pulse {
+    0%, 30%, 86%, 100% { background: transparent; }
+    34%, 82%           { background: #fff8e7; }
+  }
+  @keyframes pdfsmith-caret-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.25; }
+  }
+
+  /* Hook them up. Cubic curve on .after makes the type-in feel snappy
+     at the start of the reveal then ease into completion. */
+  .demo-row.editable {
+    animation: pdfsmith-row-pulse 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value {
+    animation: pdfsmith-field 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value .before {
+    animation: pdfsmith-before 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value .before::before {
+    animation: pdfsmith-selection 7s ease-in-out infinite;
+  }
+  .demo-row.editable .demo-value .after {
+    animation: pdfsmith-after 7s cubic-bezier(0.55, 0.05, 0.25, 1) infinite;
+  }
+  .demo-row.editable .demo-value .caret {
+    animation: pdfsmith-caret-pulse 1.1s ease-in-out infinite;
+  }
+  /* Stagger the three rows ~2.3s apart so they look like a real
+     session: edit invoice → edit receipt → edit date, on loop.
+     Negative animation-delays start each row mid-cycle. */
+  .demo-row.editable                              { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value                  { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value .before          { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value .before::before  { animation-delay: var(--t, 0s); }
+  .demo-row.editable .demo-value .after           { animation-delay: var(--t, 0s); }
+  .demo-row.editable:nth-of-type(2) { --t: -2.3s; }
+  .demo-row.editable:nth-of-type(3) { --t: -4.6s; }
+
+  /* Reduced motion: hold the original state, no animation */
+  @media (prefers-reduced-motion: reduce) {
+    .demo-row.editable,
+    .demo-row.editable .demo-value,
+    .demo-row.editable .demo-value .before,
+    .demo-row.editable .demo-value .before::before,
+    .demo-row.editable .demo-value .after,
+    .demo-row.editable .demo-value .caret { animation: none !important; }
+    .demo-row.editable .demo-value .after { clip-path: inset(0 100% 0 0); }
+  }
 
   /* ---- features grid ---- */
   .features {
@@ -278,8 +397,8 @@
   @media (max-width: 760px) {
     .hero { padding: 56px 24px 48px; }
     .feature-grid { grid-template-columns: 1fr; }
-    .demo-grid { grid-template-columns: 1fr; }
-    .demo-col + .demo-col { border-left: none; border-top: 1px solid #ececef; }
+    .demo-body { padding: 22px 22px 26px; }
+    .demo-row { grid-template-columns: 120px 1fr; font-size: 14px; }
   }
 
   /* ---- dark-mode for landing (system preference only — no manual
@@ -292,10 +411,17 @@
     .hero p, .feature p, .step p, footer { color: #98989d; }
     .feature, .step, .demo-card { background: #1c1c1e; border-color: #2c2c2e; }
     .feature .icon { background: rgba(10,132,255,0.15); }
-    .demo-header { background: #1c1c1e; border-bottom-color: #2c2c2e; color: #98989d; }
-    .demo-grid, .demo-col + .demo-col { border-color: #2c2c2e; }
-    .demo-col .row.changed { background: rgba(255,159,10,0.15); }
-    .demo-col .row.changed b { color: #ffd66b; }
+    .demo-header { background: #0f0f10; border-bottom-color: #2c2c2e; color: #98989d; }
+    .demo-body { color: #f2f2f7; }
+    .demo-body h4 { color: #f2f2f7; }
+    .demo-row b { color: #f2f2f7; }
+    .demo-value .after { color: #ffd66b; }
+    /* Amber pulse readable on dark */
+    @keyframes pdfsmith-pulse-amber-dark {
+      0%, 38%, 88%, 100% { background: transparent; }
+      44%, 82%           { background: rgba(255,159,10,0.18); }
+    }
+    .demo-row.editable { animation-name: pdfsmith-pulse-amber-dark; }
     .feature .detail { border-top-color: #2c2c2e; color: #98989d; }
     footer { border-top-color: #2c2c2e; }
     .cta.primary { background: #f2f2f7; color: #0a0a0b; }
@@ -346,32 +472,34 @@
   </div>
 </section>
 
-<!-- Before / after visual. Real fragments from a receipt with the
-     changed lines highlighted in amber, the rest untouched. -->
+<!-- Live demo card. The three editable rows cross-fade every 5 s
+     between their original values and edited ones, with the amber
+     highlight pulsing in to show "this is the part that changed". -->
 <section class="demo">
   <div class="demo-card">
     <div class="demo-header">
       <div class="traffic"><span></span><span></span><span></span></div>
-      <span>Stripe receipt · edited in PDFsmith</span>
+      <span>Stripe receipt · live preview in PDFsmith</span>
     </div>
-    <div class="demo-grid">
-      <div class="demo-col">
-        <div class="label">Before</div>
-        <div class="doc">
-          <h4>Receipt</h4>
-          <div class="row"><b>Invoice number</b><span>7B0B003B-0017</span></div>
-          <div class="row"><b>Receipt number</b><span>2047-3222-8449</span></div>
-          <div class="row"><b>Date paid</b><span>April 2, 2026</span></div>
-        </div>
+    <div class="demo-body">
+      <h4>Receipt</h4>
+      <div class="demo-row editable">
+        <b>Invoice number</b>
+        <span class="demo-value">
+          <span class="before">7B0B003B-0017</span><span class="after">7B0B003B-0099<i class="caret"></i></span>
+        </span>
       </div>
-      <div class="demo-col">
-        <div class="label">After (edited)</div>
-        <div class="doc">
-          <h4>Receipt</h4>
-          <div class="row changed"><b>Invoice number</b><span>7B0B003B-0099</span></div>
-          <div class="row changed"><b>Receipt number</b><span>2883-1034-0238</span></div>
-          <div class="row changed"><b>Date paid</b><span>May 1, 2026</span></div>
-        </div>
+      <div class="demo-row editable">
+        <b>Receipt number</b>
+        <span class="demo-value">
+          <span class="before">2047-3222-8449</span><span class="after">2883-1034-0238<i class="caret"></i></span>
+        </span>
+      </div>
+      <div class="demo-row editable">
+        <b>Date paid</b>
+        <span class="demo-value">
+          <span class="before">April 2, 2026</span><span class="after">May 1, 2026<i class="caret"></i></span>
+        </span>
       </div>
     </div>
   </div>
