@@ -25,6 +25,7 @@ from flask import (Flask, Response, abort, g, jsonify, render_template,
                    request, send_file)
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import auth
 import payload
@@ -89,6 +90,12 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 if os.environ.get("PDF_EDITOR_SECURE_COOKIE"):
     app.config["SESSION_COOKIE_SECURE"] = True
+
+# Trust the X-Forwarded-* headers from Render/Fly/any reverse proxy.
+# Without this, url_for(_external=True) returns http://internal-ip:10000
+# instead of https://yourapp.onrender.com — which would break magic
+# links that get emailed out.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_for=1)
 
 # Per-endpoint rate limits — preview-edited is the expensive one; uploads
 # create disk state so we cap them per IP/minute too.

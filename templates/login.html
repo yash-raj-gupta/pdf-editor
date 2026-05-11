@@ -323,6 +323,24 @@
     margin-top: 22px; padding-top: 18px; border-top: 1px solid #f0f0f3;
     font-size: 11px; color: #98989d; text-align: center; line-height: 1.5;
   }
+  /* "Check your inbox" success state */
+  .success-mark {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: linear-gradient(135deg, #30c759 0%, #50e07a 100%);
+    color: white;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 8px rgba(48,199,89,0.30);
+  }
+  .card .muted {
+    color: #86868b; font-size: 13px; line-height: 1.55;
+    margin-top: 8px; margin-bottom: 18px;
+  }
+  .resend-link {
+    display: inline-block; margin-top: 8px;
+    font-size: 13px; color: #007aff; text-decoration: none;
+  }
+  .resend-link:hover { text-decoration: underline; }
 
   /* ---- mobile: stack panes ---- */
   @media (max-width: 880px) {
@@ -451,6 +469,59 @@
         Back to homepage
       </a>
 
+{% if mode == "magic" and sent_to %}
+      {# "Check your inbox" state — same card frame, different content. #}
+      <div class="card">
+        <div class="success-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"
+               fill="none" stroke="currentColor" stroke-width="2.6"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4h16v16H4z" opacity="0"/>
+            <path d="M2 6l2-2h16l2 2v12l-2 2H4l-2-2V6z"/>
+            <path d="M22 6L12 14 2 6"/>
+          </svg>
+        </div>
+        <h1>Check your inbox</h1>
+        <p class="lead">
+          We sent a sign-in link to <strong>{{ sent_to }}</strong>.
+          The link is valid for 30 minutes.
+        </p>
+        <p class="muted">
+          Click the link in the email to finish signing in. You can close
+          this tab — the link works on any device.
+        </p>
+        <a class="resend-link" href="{{ url_for('login', next=next) }}">
+          ← Use a different email
+        </a>
+        <div class="footer-note">
+          Not seeing the email? Check spam. The sender is
+          PDFsmith (auth@yashrajgupta.com).
+        </div>
+      </div>
+
+{% elif mode == "magic" %}
+      {# Magic-link mode: ask for email. #}
+      <form class="card" method="POST" action="{{ url_for('login_post') }}">
+        <h1>Sign in</h1>
+        <p class="lead">Enter your email and we'll send you a one-tap sign-in link.</p>
+
+        {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+        <label for="email">Email</label>
+        <input type="email" name="email" id="email"
+               autofocus required
+               autocomplete="email"
+               placeholder="you@example.com">
+        <input type="hidden" name="next" value="{{ next }}">
+        <button type="submit">Send sign-in link</button>
+
+        <div class="footer-note">
+          No password to remember. Links expire after 30 minutes.
+        </div>
+      </form>
+
+{% else %}
+      {# Password mode (legacy / dev). #}
       <form class="card" method="POST" action="{{ url_for('login_post') }}">
         <h1>Sign in</h1>
         <p class="lead">Enter the shared password to continue.</p>
@@ -469,6 +540,7 @@
           Nothing leaves the server.
         </div>
       </form>
+{% endif %}
     </section>
 
   </div>
