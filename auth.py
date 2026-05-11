@@ -148,6 +148,7 @@ def register(app: Flask, limiter: Limiter) -> None:
         expected = PASSWORD.encode("utf-8")
         if expected and hmac.compare_digest(submitted, expected):
             session.clear()
+            session.permanent = True     # honour PERMANENT_SESSION_LIFETIME
             session["authed"] = True
             return redirect(next_url)
         return render_template("login.html", mode=mode, next=next_url,
@@ -238,9 +239,12 @@ def register(app: Flask, limiter: Limiter) -> None:
             ), 403
 
         session.clear()
+        session.permanent = True     # honour PERMANENT_SESSION_LIFETIME
         session["authed"] = True
         session["email"] = email
-        log.info("magic-link sign-in: %s", email)
+        log.info("magic-link sign-in: %s — session valid for %d days",
+                 email,
+                 int(app.config["PERMANENT_SESSION_LIFETIME"].total_seconds() / 86400))
         return redirect(next_url)
 
     @app.post("/logout")

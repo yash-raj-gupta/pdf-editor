@@ -19,6 +19,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import timedelta
 
 import fitz
 from flask import (Flask, Response, abort, g, jsonify, render_template,
@@ -80,6 +81,13 @@ MAX_SESSIONS_PER_IP = int(os.environ.get("PDF_MAX_SESSIONS_PER_IP") or 5)
 MAX_PAGES_PER_PDF = int(os.environ.get("PDF_MAX_PAGES") or 500)
 PREVIEW_DPI = 144  # 2x of PDF's 72 DPI baseline -> retina-friendly preview
 
+# How long a signed-in session stays valid before the user must request
+# another magic link / re-enter the password. 2 days is short enough
+# that a stolen device or leaked laptop doesn't keep someone logged in
+# for weeks, while still saving family users from re-authing every day.
+# Override per environment with the LOGIN_LIFETIME_DAYS env var.
+LOGIN_LIFETIME_DAYS = int(os.environ.get("LOGIN_LIFETIME_DAYS") or 2)
+
 
 # ---- app + extensions ------------------------------------------------------
 
@@ -88,6 +96,7 @@ app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB cap
 app.config["SECRET_KEY"] = SECRET_KEY
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=LOGIN_LIFETIME_DAYS)
 if os.environ.get("PDF_EDITOR_SECURE_COOKIE"):
     app.config["SESSION_COOKIE_SECURE"] = True
 
