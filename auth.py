@@ -160,7 +160,14 @@ def register(app: Flask, limiter: Limiter) -> None:
         email regardless of whether the email is on the allowlist —
         that prevents enumeration of who's invited."""
         email = (request.form.get("email") or "").strip().lower()
+        log.info(
+            "magic-link request: email=%r allowlist=%s ttl_min=%d",
+            email,
+            "(open — no allowlist set)" if not _ALLOWLIST else list(_ALLOWLIST),
+            MAGIC_TTL_SECONDS // 60,
+        )
         if not _looks_like_email(email):
+            log.info("magic-link rejected (malformed email): %r", email)
             return render_template(
                 "login.html", mode="magic", next=next_url,
                 error="Please enter a valid email address.",
@@ -169,21 +176,29 @@ def register(app: Flask, limiter: Limiter) -> None:
         if _email_allowed(email):
             token = _signer().dumps({"email": email, "next": next_url})
             magic_url = url_for("auth_magic", t=token, _external=True)
+            log.info("magic-link generated for %s — magic_url=%s",
+                     email, magic_url)
             ok = send_magic_link(to=email, magic_url=magic_url,
                                  ttl_minutes=MAGIC_TTL_SECONDS // 60)
             if not ok:
-                # Email send failed — be transparent so user can retry.
+                # Email send failed. Specific reason is in the
+                # email_send logs above this one — copy from Render's
+                # log stream when debugging.
+                log.error("magic-link send FAILED for %s — see preceding "
+                          "email_send log lines for the Resend error",
+                          email)
                 return render_template(
                     "login.html", mode="magic", next=next_url,
                     error="Couldn't send the email right now. Try again in a minute.",
                 ), 503
-            log.info("magic-link sent to %s", email)
+            log.info("magic-link sent OK to %s", email)
         else:
             # Quietly drop the request — same UI as success — to avoid
             # leaking who's on the allowlist. The real consequence is
             # the recipient never gets an email and won't be able to
             # sign in. Log it so admin can see attempts.
-            log.warning("magic-link blocked (not on allowlist): %s", email)
+            log.warning("magic-link blocked (not on allowlist): %r — "
+                        "allowlist=%s", email, list(_ALLOWLIST))
 
         # Same response either way.
         return redirect(url_for("login", sent_to=email, next=next_url))

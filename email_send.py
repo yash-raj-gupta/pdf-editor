@@ -9,9 +9,16 @@ Env vars:
   EMAIL_FROM       sender address on a verified domain
                    (e.g. "PDFsmith <auth@yashrajgupta.com>")
 
-Failures log a useful message but never raise — the caller decides
-whether to surface "couldn't send email right now" to the user, retry,
-or fall back to a different auth path.
+Every send attempt logs:
+  * the masked API key prefix (so you can confirm it's the right one)
+  * the sender + recipient
+  * Resend's HTTP status code AND response body on any non-2xx
+  * a parsed Resend error code where present (so you can match it
+    against https://resend.com/docs/api-reference/errors)
+
+These logs go to the root logger which gunicorn forwards to stdout —
+visible in Render's Logs tab. Failures are at WARNING / ERROR so they
+stand out in the log stream.
 """
 
 from __future__ import annotations
@@ -19,10 +26,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import urllib.error
 import urllib.request
 
 log = logging.getLogger(__name__)
+
+# Make sure email-send log lines show up in Render even before the rest
+# of the app has configured logging. Idempotent — only adds once.
+if not log.handlers:
+    _h = logging.StreamHandler(sys.stderr)
+    _h.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [email_send] %(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    log.propagate = True
 
 _RESEND_API_URL = "https://api.resend.com/emails"
 _TIMEOUT_SECONDS = 15
@@ -34,17 +52,60 @@ def is_configured() -> bool:
         os.environ.get("EMAIL_FROM"))
 
 
+def _masked(api_key: str) -> str:
+    """Return e.g. 're_abcd…(34 chars)' so logs can verify the right key
+    is loaded without leaking the secret."""
+    if not api_key:
+        return "<empty>"
+    if len(api_key) <= 10:
+        return f"{api_key[:3]}…({len(api_key)} chars)"
+    return f"{api_key[:6]}…{api_key[-2:]} ({len(api_key)} chars)"
+
+
+# Common Resend error codes worth surfacing to the log reader. Sourced
+# from https://resend.com/docs/api-reference/errors plus observed codes.
+_RESEND_HINTS = {
+    "validation_error":      "EMAIL_FROM rejected — usually means the domain isn't fully verified yet OR the local part has bad chars. Check Resend → Domains is green.",
+    "missing_api_key":       "RESEND_API_KEY not sent in Authorization header.",
+    "invalid_api_key":       "RESEND_API_KEY value is wrong or revoked. Rotate it in Resend → API keys.",
+    "rate_limit_exceeded":   "Resend free-tier rate limit hit (100/day, 2/sec). Wait or upgrade.",
+    "restricted_api_key":    "API key has restricted permissions. Use a full-access key for sending.",
+    "domain_not_verified":   "EMAIL_FROM domain isn't verified in Resend. Add the DNS records they show you.",
+    "from_address_not_allowed": "EMAIL_FROM doesn't match any verified domain on this account.",
+    "not_found":             "Endpoint or resource not found — usually a typo in the request.",
+    # Cloudflare codes (Resend sits behind CF) — these show up in the
+    # raw text body, not JSON. We special-case them in the handler.
+    "cf_1010":               "Cloudflare flagged the User-Agent or IP as bot-like. The fix is to set a real User-Agent header on the request.",
+    "cf_1020":               "Cloudflare's WAF blocked the request. Try again or check the source IP.",
+}
+
+
+def _classify_text_error(raw: str) -> tuple[str, str]:
+    """Resend sometimes returns plain text (Cloudflare front-door errors)
+    instead of JSON. Map them to (code, message) so logs are useful."""
+    if not raw:
+        return "", ""
+    snippet = raw.lower()
+    if "error code: 1010" in snippet:
+        return "cf_1010", "Cloudflare blocked the request (likely bot User-Agent)."
+    if "error code: 1020" in snippet:
+        return "cf_1020", "Cloudflare WAF blocked the request."
+    return "", ""
+
+
 def send_email(*, to: str, subject: str, html: str,
                text: str | None = None) -> bool:
-    """POST one email to Resend. Returns True on success, False otherwise.
+    """POST one email to Resend. Returns True on success.
 
-    The plain-text version is optional but recommended — some inbox
-    providers downrank HTML-only mail as a spam signal.
+    Failures never raise — they log the full Resend response and return
+    False. Callers decide whether to surface a generic error to the user
+    or do something more interesting.
     """
-    api_key = os.environ.get("RESEND_API_KEY")
-    sender = os.environ.get("EMAIL_FROM")
+    api_key = os.environ.get("RESEND_API_KEY", "")
+    sender = os.environ.get("EMAIL_FROM", "")
     if not api_key or not sender:
-        log.error("RESEND_API_KEY or EMAIL_FROM not set; cannot send email")
+        log.error("CONFIG: missing RESEND_API_KEY or EMAIL_FROM — "
+                  "key=%r from=%r", _masked(api_key), sender)
         return False
 
     payload: dict = {
@@ -56,31 +117,67 @@ def send_email(*, to: str, subject: str, html: str,
     if text:
         payload["text"] = text
 
-    body = json.dumps(payload).encode("utf-8")
+    log.info("SEND attempt: from=%r to=%r subject=%r key=%s",
+             sender, to, subject, _masked(api_key))
+
+    body_bytes = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        _RESEND_API_URL, data=body, method="POST",
+        _RESEND_API_URL, data=body_bytes, method="POST",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Resend sits behind Cloudflare; the default urllib UA
+            # ("Python-urllib/x.y") is on Cloudflare's bot list and
+            # returns a 403 "error code: 1010". A real-looking UA
+            # avoids that without affecting Resend's own handling.
+            "User-Agent": "PDFsmith/1.0 (+https://pdfsmith.yashrajgupta.com)",
+            "Accept": "application/json",
         },
     )
+
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
             data = resp.read()
-            if resp.status not in (200, 201, 202):
-                log.error("Resend %d: %s", resp.status, data[:200])
-                return False
-            log.info("Resend accepted email to %s", to)
-            return True
+            try:
+                parsed = json.loads(data.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                parsed = {}
+            if resp.status in (200, 201, 202):
+                msg_id = parsed.get("id") or "<no id>"
+                log.info("SEND ok: to=%r status=%d resend_id=%s",
+                         to, resp.status, msg_id)
+                return True
+            log.error("SEND failed: to=%r status=%d body=%s",
+                      to, resp.status, data[:500].decode("utf-8", "replace"))
+            return False
+
     except urllib.error.HTTPError as e:
+        # Resend returns its error JSON in the response body of 4xx/5xx.
         try:
-            err_body = e.read().decode("utf-8", errors="replace")[:300]
+            err_raw = e.read().decode("utf-8", errors="replace")[:600]
         except Exception:
-            err_body = ""
-        log.error("Resend HTTP %d sending to %s: %s", e.code, to, err_body)
+            err_raw = ""
+        # Try to parse as JSON to extract the error code/name; fall back
+        # to plain-text matching (Cloudflare front-door errors).
+        code = ""
+        message = ""
+        try:
+            err_json = json.loads(err_raw)
+            code = err_json.get("name") or err_json.get("error") or ""
+            message = err_json.get("message") or ""
+        except ValueError:
+            code, message = _classify_text_error(err_raw)
+
+        hint = _RESEND_HINTS.get(code, "")
+        log.error("SEND failed (HTTP %d): to=%r from=%r code=%r message=%r%s\n"
+                  "  raw_body=%s",
+                  e.code, to, sender, code, message,
+                  f"\n  hint: {hint}" if hint else "",
+                  err_raw)
         return False
+
     except (urllib.error.URLError, OSError) as e:
-        log.error("Resend network error sending to %s: %s", to, e)
+        log.error("SEND failed (network): to=%r error=%s", to, e)
         return False
 
 
