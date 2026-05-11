@@ -43,7 +43,10 @@ log = logging.getLogger(__name__)
 # ---- configuration ---------------------------------------------------------
 
 PASSWORD = os.environ.get("PDF_EDITOR_PASSWORD") or ""
-DEV_NOAUTH =  PASSWORD  # when no password is set, run wide-open (dev only)
+# Dev-only "no auth at all" mode: true ONLY when neither a shared password
+# nor email-based magic-link is configured. With either set, the
+# before_request guard runs and the user must authenticate.
+DEV_NOAUTH = not (PASSWORD or _email_configured())
 PUBLIC_PATHS = ("/", "/login", "/healthz", "/favicon.ico",
                 "/robots.txt", "/sitemap.xml")
 
