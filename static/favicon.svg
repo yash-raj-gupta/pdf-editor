@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#007aff"/>
+      <stop offset="1" stop-color="#4d9dff"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square in brand gradient -->
+  <rect x="2" y="2" width="28" height="28" rx="7" fill="url(#g)"/>
+  <!-- Document + small edit checkmark, in white. Path mirrors the inline
+       icon used on the login page and editor header so the brand reads as
+       one mark across every surface. -->
+  <g fill="none" stroke="white" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round"
+     transform="translate(5.5 5.5) scale(0.88)">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+    <path d="m11.5 14.5 1.5 1.5 3-3"/>
+  </g>
+</svg>

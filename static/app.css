@@ -14,7 +14,24 @@
     flex-shrink: 0;
   }
   header h1 { font-size: 17px; font-weight: 600; }
-  header .file-info { color: #86868b; font-size: 13px; flex: 1; }
+  header .file-info { color: #86868b; font-size: 13px; flex: 1;
+                      min-width: 0; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+  /* Brand block: small gradient logo + name. Replaces the bare <h1>. */
+  .brand {
+    display: inline-flex; align-items: center; gap: 9px;
+    text-decoration: none; color: inherit;
+  }
+  .brand-logo {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(135deg, #007aff 0%, #4d9dff 100%);
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 3px rgba(0,122,255,0.30);
+    flex-shrink: 0;
+  }
+  .brand-name {
+    font-size: 17px; font-weight: 700; letter-spacing: -0.01em;
+  }
 
   .btn {
     background: #007aff; color: white; border: none; padding: 8px 16px;
@@ -34,13 +51,32 @@
   .drop-zone {
     background: white; border: 2px dashed #c7c7cc; border-radius: 14px;
     padding: 56px 80px; text-align: center; max-width: 520px;
-    transition: all 0.15s; cursor: pointer;
+    transition: all 0.2s; cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
   }
   .drop-zone:hover, .drop-zone.dragover {
     border-color: #007aff; background: #f0f7ff;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px -8px rgba(0,122,255,0.20);
   }
-  .drop-zone h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
-  .drop-zone p { color: #86868b; margin-bottom: 22px; font-size: 14px; }
+  .drop-zone-icon {
+    width: 72px; height: 72px; margin: 0 auto 16px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #f0f7ff 0%, #e3efff 100%);
+    color: #007aff;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .drop-zone:hover .drop-zone-icon,
+  .drop-zone.dragover .drop-zone-icon {
+    transform: scale(1.05);
+    background: linear-gradient(135deg, #e3efff 0%, #d0e6ff 100%);
+  }
+  .drop-zone h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px;
+                   letter-spacing: -0.01em; }
+  .drop-zone p { color: #86868b; margin-bottom: 22px; font-size: 14px;
+                  line-height: 1.5; max-width: 320px; margin-left: auto;
+                  margin-right: auto; }
   .drop-zone input[type="file"] { display: none; }
   .alert { padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-top: 16px; }
   .alert.error { background: #ffebee; color: #c62828; }
@@ -263,9 +299,10 @@
   /* ---- mobile responsive layout ---- */
   @media (max-width: 900px) {
     header { padding: 10px 12px; gap: 8px; }
-    header h1 { font-size: 15px; }
-    header .file-info { font-size: 11px; max-width: 40%;
-                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .brand-name { font-size: 15px; }
+    .brand-logo { width: 26px; height: 26px; border-radius: 7px; }
+    header h1 { font-size: 15px; }   /* legacy fallback */
+    header .file-info { display: none; }   /* save horizontal room on phones */
     #editor-pane,
     body[data-multipage="1"] #editor-pane {
       grid-template-columns: 1fr; gap: 8px; padding: 8px;
@@ -321,6 +358,10 @@
     body:not([data-theme="light"]) .diff-summary { background: rgba(48,209,88,0.15); color: #b8e6c1; }
     body:not([data-theme="light"]) .diff-summary.warn { background: rgba(255,159,10,0.15); color: #ffd66b; }
     body:not([data-theme="light"]) .alert.error { background: rgba(255,69,58,0.18); color: #ffb4ad; }
+    body:not([data-theme="light"]) .drop-zone-icon {
+      background: linear-gradient(135deg, rgba(10,132,255,0.18) 0%, rgba(10,132,255,0.10) 100%);
+      color: #0a84ff;
+    }
   }
   body[data-theme="dark"] { background: #1c1c1e; color: #f2f2f7; }
   body[data-theme="dark"] header { background: #2c2c2e; border-color: #38383a; }
@@ -351,6 +392,10 @@
   body[data-theme="dark"] .diff-summary { background: rgba(48,209,88,0.15); color: #b8e6c1; }
   body[data-theme="dark"] .diff-summary.warn { background: rgba(255,159,10,0.15); color: #ffd66b; }
   body[data-theme="dark"] .alert.error { background: rgba(255,69,58,0.18); color: #ffb4ad; }
+  body[data-theme="dark"] .drop-zone-icon {
+    background: linear-gradient(135deg, rgba(10,132,255,0.18) 0%, rgba(10,132,255,0.10) 100%);
+    color: #0a84ff;
+  }
 
   .theme-toggle {
     background: transparent; border: 1px solid #d1d1d6; color: #1d1d1f;

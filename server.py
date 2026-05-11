@@ -136,6 +136,53 @@ def _on_unhandled(e):
     }), 500
 
 
+@app.get("/favicon.ico")
+def favicon_ico():
+    """Serve the SVG favicon for /favicon.ico requests. Browsers that don't
+    understand SVG favicons (very few left) will get the 302 to the SVG file
+    via Flask's static handler; rasterized PNG variants are linked from the
+    template head for those that explicitly want them."""
+    return app.send_static_file("favicon.svg")
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    """Tell crawlers what to index. The app is auth-gated so only the login
+    page is public; everything else is noise to a search engine."""
+    body = (
+        "User-agent: *\n"
+        "Allow: /login\n"
+        "Allow: /static/\n"
+        "Disallow: /upload\n"
+        "Disallow: /save/\n"
+        "Disallow: /preview/\n"
+        "Disallow: /preview-edited/\n"
+        "Disallow: /download/\n"
+        "Disallow: /thumb/\n"
+        "Disallow: /ocr/\n"
+        "Disallow: /sessions/\n"
+        "Disallow: /healthz\n"
+        f"\nSitemap: {request.url_root}sitemap.xml\n"
+    )
+    return Response(body, mimetype="text/plain")
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    """Minimal sitemap — the app is auth-gated, so only /login is public.
+    Including it explicitly lets search engines treat /login as the
+    canonical entry point rather than guessing."""
+    base = request.url_root.rstrip("/")
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f'  <url><loc>{base}/login</loc>'
+        f'<changefreq>monthly</changefreq><priority>1.0</priority></url>\n'
+        '</urlset>\n'
+    )
+    return Response(body, mimetype="application/xml")
+
+
 @app.get("/healthz")
 def healthz():
     """Liveness probe — no auth, no I/O."""

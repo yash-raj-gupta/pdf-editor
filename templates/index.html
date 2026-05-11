@@ -3,13 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+
 <title>PDFsmith</title>
+<meta name="description" content="PDFsmith — edit text in PDFs while keeping the original fonts, sizes and colors.">
+<meta name="theme-color" content="#007aff">
+<!-- This page is auth-gated; crawlers shouldn't index it -->
+<meta name="robots" content="noindex, nofollow">
+
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
 
 <header>
-  <h1>PDFsmith</h1>
+  <a class="brand" href="/" aria-label="PDFsmith home">
+    <span class="brand-logo">
+      <svg viewBox="0 0 24 24" width="20" height="20"
+           fill="none" stroke="white" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <path d="m11.5 14.5 1.5 1.5 3-3"/>
+      </svg>
+    </span>
+    <span class="brand-name">PDFsmith</span>
+  </a>
   <span class="file-info" id="file-info">Edit PDFs in place — fonts, sizes and colors stay original.</span>
   <div class="mobile-tabs" id="mobile-tabs" hidden>
     <button id="mob-tab-preview" class="active" type="button">Preview</button>
@@ -18,12 +38,33 @@
   <button class="theme-toggle" id="theme-toggle" type="button"
           title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
   <button class="btn secondary" id="new-pdf-btn" hidden>Open another PDF</button>
+  <form method="POST" action="{{ url_for('logout') }}" style="display:inline">
+    <button class="theme-toggle" type="submit" title="Sign out" aria-label="Sign out">
+      <svg viewBox="0 0 24 24" width="16" height="16"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+        <polyline points="16 17 21 12 16 7"/>
+        <line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+    </button>
+  </form>
 </header>
 
 <main id="upload-pane">
   <div class="drop-zone" id="drop-zone">
+    <div class="drop-zone-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="48" height="48"
+           fill="none" stroke="currentColor" stroke-width="1.5"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="9" y1="13" x2="15" y2="13"/>
+        <line x1="9" y1="17" x2="13" y2="17"/>
+      </svg>
+    </div>
     <h2>Drop a PDF here</h2>
-    <p>or click to browse</p>
+    <p>or click to browse — receipts, invoices, contracts, anything PDF</p>
     <input type="file" id="file-input" accept="application/pdf">
     <button class="btn" id="browse-btn">Choose PDF</button>
     <div class="alert error" id="upload-error" hidden></div>

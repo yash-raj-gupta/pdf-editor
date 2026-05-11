@@ -21,7 +21,8 @@ from flask_limiter import Limiter
 
 PASSWORD = os.environ.get("PDF_EDITOR_PASSWORD") or ""
 DEV_NOAUTH = not PASSWORD  # when no password is set, run wide-open (dev only)
-PUBLIC_PATHS = ("/login", "/healthz", "/favicon.ico")
+PUBLIC_PATHS = ("/login", "/healthz", "/favicon.ico",
+                "/robots.txt", "/sitemap.xml")
 
 
 def register(app: Flask, limiter: Limiter) -> None:
